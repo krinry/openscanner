@@ -6,9 +6,13 @@ import android.graphics.BitmapFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
+import org.openscanner.cv.CollageGenerator
+import org.openscanner.cv.CollageLayout
 import org.openscanner.data.local.DocumentDao
+import org.openscanner.data.local.FolderDao
 import org.openscanner.data.local.PageDao
 import org.openscanner.data.model.Document
+import org.openscanner.data.model.Folder
 import org.openscanner.data.model.Page
 import java.io.File
 import java.io.FileOutputStream
@@ -18,22 +22,71 @@ import java.util.*
 class ScannerRepository(
     private val context: Context,
     private val documentDao: DocumentDao,
-    private val pageDao: PageDao
+    private val pageDao: PageDao,
+    private val folderDao: FolderDao
 ) {
 
+    // --- Document Queries ---
     fun getAllDocuments(): Flow<List<Document>> = documentDao.getAllDocuments()
+
+    fun getRootDocuments(): Flow<List<Document>> = documentDao.getRootDocuments()
+
+    fun getDocumentsInFolder(folderId: Long): Flow<List<Document>> = documentDao.getDocumentsInFolder(folderId)
 
     fun searchDocuments(query: String): Flow<List<Document>> = documentDao.searchDocuments(query)
 
     suspend fun getDocumentById(id: Long): Document? = documentDao.getDocumentById(id)
 
+    // --- Folder Queries & Mutations ---
+    fun getAllFolders(): Flow<List<Folder>> = folderDao.getAllFolders()
+
+    suspend fun createFolder(name: String, color: String = "#EEAA3B"): Long = withContext(Dispatchers.IO) {
+        val folder = Folder(name = name.trim(), color = color)
+        folderDao.insertFolder(folder)
+    }
+
+    suspend fun renameFolder(folderId: Long, newName: String) = withContext(Dispatchers.IO) {
+        val folder = folderDao.getFolderById(folderId) ?: return@withContext
+        folderDao.updateFolder(folder.copy(name = newName.trim()))
+    }
+
+    suspend fun deleteFolder(folder: Folder) = withContext(Dispatchers.IO) {
+        documentDao.unlinkDocumentsFromFolder(folder.id)
+        folderDao.deleteFolder(folder)
+    }
+
+    suspend fun getFolderDocCount(folderId: Long): Int = withContext(Dispatchers.IO) {
+        documentDao.getFolderDocCount(folderId)
+    }
+
+    suspend fun moveDocumentToFolder(docId: Long, folderId: Long) = withContext(Dispatchers.IO) {
+        documentDao.updateDocumentFolder(docId, folderId)
+    }
+
+    suspend fun batchMoveToFolder(docIds: List<Long>, folderId: Long) = withContext(Dispatchers.IO) {
+        documentDao.batchUpdateFolder(docIds, folderId)
+    }
+
+    suspend fun batchDeleteDocuments(docIds: List<Long>) = withContext(Dispatchers.IO) {
+        for (id in docIds) {
+            val pages = pageDao.getPagesListForDocument(id)
+            pages.forEach { p ->
+                File(p.processedImagePath).delete()
+                File(p.originalImagePath).delete()
+                File(p.thumbnailPath).delete()
+            }
+        }
+        documentDao.batchDeleteDocuments(docIds)
+    }
+
+    // --- Page Operations ---
     fun getPagesForDocument(docId: Long): Flow<List<Page>> = pageDao.getPagesForDocument(docId)
 
     suspend fun getPagesListForDocument(docId: Long): List<Page> = pageDao.getPagesListForDocument(docId)
 
-    suspend fun createNewDocument(title: String? = null): Long = withContext(Dispatchers.IO) {
-        val defaultTitle = title ?: ("Doc " + SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date()))
-        val doc = Document(title = defaultTitle)
+    suspend fun createNewDocument(title: String? = null, folderId: Long = -1L): Long = withContext(Dispatchers.IO) {
+        val defaultTitle = title ?: ("New Doc " + SimpleDateFormat("dd-MM-yyyy HH.mm", Locale.getDefault()).format(Date()))
+        val doc = Document(title = defaultTitle, folderId = folderId)
         documentDao.insertDocument(doc)
     }
 
@@ -68,7 +121,7 @@ class ScannerRepository(
         val thumb = Bitmap.createScaledBitmap(
             processedBitmap,
             240,
-            (240f * processedBitmap.height / processedBitmap.width).toInt(),
+            (240f * processedBitmap.height / processedBitmap.width).toInt().coerceAtLeast(1),
             true
         )
         FileOutputStream(thumbFile).use { out ->
@@ -135,13 +188,53 @@ class ScannerRepository(
 
         val thumbFile = File(page.thumbnailPath)
         if (thumbFile.exists()) {
-            val thumb = Bitmap.createScaledBitmap(mutable, 240, (240f * mutable.height / mutable.width).toInt(), true)
+            val thumb = Bitmap.createScaledBitmap(mutable, 240, (240f * mutable.height / mutable.width).toInt().coerceAtLeast(1), true)
             FileOutputStream(thumbFile).use { out ->
                 thumb.compress(Bitmap.CompressFormat.JPEG, 80, out)
             }
         }
 
         val doc = documentDao.getDocumentById(page.documentId)
+        if (doc != null) {
+            documentDao.updateDocument(doc.copy(modifiedTime = System.currentTimeMillis()))
+        }
+    }
+
+    suspend fun createCollagePage(
+        documentId: Long,
+        pageIds: List<Long>,
+        layout: CollageLayout
+    ): Page = withContext(Dispatchers.IO) {
+        val bitmaps = mutableListOf<Bitmap>()
+        for (pId in pageIds) {
+            val page = pageDao.getPageById(pId)
+            if (page != null && File(page.processedImagePath).exists()) {
+                val bmp = BitmapFactory.decodeFile(page.processedImagePath)
+                if (bmp != null) {
+                    bitmaps.add(bmp)
+                }
+            }
+        }
+
+        if (bitmaps.isEmpty()) {
+            throw IllegalStateException("No valid page images found for collage")
+        }
+
+        val collageBitmap = CollageGenerator.createCollage(bitmaps, layout)
+        savePage(
+            documentId = documentId,
+            processedBitmap = collageBitmap,
+            originalBitmap = collageBitmap,
+            cropBorderJson = "",
+            enhanceModeId = 1
+        )
+    }
+
+    suspend fun reorderPages(documentId: Long, orderedPages: List<Page>) = withContext(Dispatchers.IO) {
+        orderedPages.forEachIndexed { index, page ->
+            pageDao.updatePage(page.copy(pageIndex = index))
+        }
+        val doc = documentDao.getDocumentById(documentId)
         if (doc != null) {
             documentDao.updateDocument(doc.copy(modifiedTime = System.currentTimeMillis()))
         }

@@ -5,13 +5,15 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import org.openscanner.data.model.Document
+import org.openscanner.data.model.Folder
 import org.openscanner.data.model.Page
 
-@Database(entities = [Document::class, Page::class], version = 1, exportSchema = false)
+@Database(entities = [Document::class, Page::class, Folder::class], version = 2, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
 
     abstract fun documentDao(): DocumentDao
     abstract fun pageDao(): PageDao
+    abstract fun folderDao(): FolderDao
 
     companion object {
         @Volatile
@@ -23,7 +25,9 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "openscanner.db"
-                ).build()
+                )
+                    .fallbackToDestructiveMigration()
+                    .build()
                 INSTANCE = instance
                 instance
             }

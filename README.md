@@ -1,10 +1,10 @@
 # 📄 OpenScanner
 
-> **OpenScanner** is a 100% free, open-source, offline, and privacy-respecting document scanner app for Android — built as a clean-room alternative to **OKEN Scanner** and **CamScanner** without ads, tracking, watermarks, or cloud subscriptions.
+> **OpenScanner** is a 100% free, open-source, offline, and privacy-respecting document scanner app for Android — built with Jetpack Compose, CameraX, and high-performance native C++ algorithms without ads, tracking, watermarks, or cloud subscriptions.
 
 ---
 
-## 🌟 Key Features (Matched 1:1 with OKEN Scanner)
+## 🌟 Key Features
 
 1. **High-Speed Camera Viewfinder (CameraX):**
    - Real-time 60fps document boundary detection with green tracking overlay.

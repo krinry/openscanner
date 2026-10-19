@@ -44,7 +44,7 @@ import org.openscanner.OpenScannerApp
 import org.openscanner.R
 import org.openscanner.camera.CaptureMode
 import org.openscanner.camera.DocumentAnalyzer
-import org.openscanner.ui.theme.OkenGreen
+import org.openscanner.ui.theme.ScannerGreen
 import java.util.concurrent.Executors
 
 @Composable
@@ -190,7 +190,7 @@ fun CameraScreen(
                     .padding(top = 96.dp),
                 color = Color.Black.copy(alpha = 0.75f),
                 shape = RoundedCornerShape(16.dp),
-                border = androidx.compose.foundation.BorderStroke(1.dp, OkenGreen)
+                border = androidx.compose.foundation.BorderStroke(1.dp, ScannerGreen)
             ) {
                 Text(
                     text = if (currentMode == CaptureMode.ID_CARD) {
@@ -204,7 +204,7 @@ fun CameraScreen(
             }
         }
 
-        // Top Control Bar (Official OKEN Scanner layout)
+        // Top Control Bar
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -220,7 +220,7 @@ fun CameraScreen(
                 // Auto Crop Pill
                 Surface(
                     shape = RoundedCornerShape(16.dp),
-                    color = if (autoCropEnabled) OkenGreen.copy(alpha = 0.85f) else Color.Black.copy(alpha = 0.5f),
+                    color = if (autoCropEnabled) ScannerGreen.copy(alpha = 0.85f) else Color.Black.copy(alpha = 0.5f),
                     modifier = Modifier.clickable { autoCropEnabled = !autoCropEnabled }
                 ) {
                     Text(
@@ -237,7 +237,7 @@ fun CameraScreen(
                     Icon(
                         if (showGrid) Icons.Filled.GridOn else Icons.Outlined.GridOff,
                         contentDescription = "Grid",
-                        tint = if (showGrid) OkenGreen else Color.White
+                        tint = if (showGrid) ScannerGreen else Color.White
                     )
                 }
 
@@ -247,13 +247,13 @@ fun CameraScreen(
                         flashIcon,
                         contentDescription = "Flash",
                         modifier = Modifier.size(24.dp),
-                        tint = if (flashMode != ImageCapture.FLASH_MODE_OFF) OkenGreen else Color.White
+                        tint = if (flashMode != ImageCapture.FLASH_MODE_OFF) ScannerGreen else Color.White
                     )
                 }
             }
         }
 
-        // Bottom Controls: Modes Carousel + CamScanner Shutter
+        // Bottom Controls: Modes Carousel + Camera Shutter
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -280,7 +280,7 @@ fun CameraScreen(
                     ) {
                         Text(
                             text = mode.title.uppercase(),
-                            color = if (isSelected) OkenGreen else Color.LightGray,
+                            color = if (isSelected) ScannerGreen else Color.LightGray,
                             fontSize = if (isSelected) 14.sp else 13.sp,
                             fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
                         )
@@ -290,7 +290,7 @@ fun CameraScreen(
                                 modifier = Modifier
                                     .size(width = 18.dp, height = 3.dp)
                                     .clip(RoundedCornerShape(2.dp))
-                                    .background(OkenGreen)
+                                    .background(ScannerGreen)
                             )
                         } else {
                             Spacer(modifier = Modifier.height(3.dp))
@@ -320,14 +320,14 @@ fun CameraScreen(
                     )
                 }
 
-                // OKEN Scanner Signature Shutter Button
+                // Camera Shutter Button
                 Box(
                     modifier = Modifier
                         .size(80.dp)
                         .border(4.dp, Color.White, CircleShape)
                         .padding(5.dp)
                         .clip(CircleShape)
-                        .background(OkenGreen)
+                        .background(ScannerGreen)
                         .clickable {
                             imageCapture?.let { capture ->
                                 if (currentMode == CaptureMode.ID_CARD) {
@@ -346,7 +346,8 @@ fun CameraScreen(
                                                         val repo = org.openscanner.data.repository.ScannerRepository(
                                                             context = context,
                                                             documentDao = app.database.documentDao(),
-                                                            pageDao = app.database.pageDao()
+                                                            pageDao = app.database.pageDao(),
+                                                            folderDao = app.database.folderDao()
                                                         )
                                                         val targetDocId = if (docId > 0) docId else repo.createNewDocument("ID Card Scan")
                                                         repo.stitchIdCardPages(front, bmp, targetDocId)
@@ -389,7 +390,7 @@ fun CameraScreen(
                             .size(48.dp)
                             .clip(CircleShape)
                             .clickable { onClose() },
-                        color = OkenGreen
+                        color = ScannerGreen
                     ) {
                         Box(contentAlignment = Alignment.Center) {
                             Text(

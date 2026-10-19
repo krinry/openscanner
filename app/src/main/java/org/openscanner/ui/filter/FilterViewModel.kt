@@ -23,7 +23,7 @@ import kotlin.math.max
 class FilterViewModel(application: Application) : AndroidViewModel(application) {
 
     private val db = (application as OpenScannerApp).database
-    private val repository = ScannerRepository(application, db.documentDao(), db.pageDao())
+    private val repository = ScannerRepository(application, db.documentDao(), db.pageDao(), db.folderDao())
 
     private var rawBitmap: Bitmap? = null
     private var warpedBaseBitmap: Bitmap? = null

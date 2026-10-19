@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
@@ -18,7 +19,9 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.openscanner.OpenScannerApp
+import org.openscanner.cv.CollageLayout
 import org.openscanner.data.model.Document
+import org.openscanner.data.model.Folder
 import org.openscanner.data.model.Page
 import org.openscanner.data.repository.ScannerRepository
 import org.openscanner.pdf.PdfExportOptions
@@ -26,17 +29,21 @@ import org.openscanner.pdf.PdfGenerator
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.util.ArrayList
 
 class DocumentDetailViewModel(application: Application) : AndroidViewModel(application) {
 
     private val db = (application as OpenScannerApp).database
-    private val repository = ScannerRepository(application, db.documentDao(), db.pageDao())
+    private val repository = ScannerRepository(application, db.documentDao(), db.pageDao(), db.folderDao())
 
     private val _document = MutableStateFlow<Document?>(null)
     val document: StateFlow<Document?> = _document
 
     private val _pages = MutableStateFlow<List<Page>>(emptyList())
     val pages: StateFlow<List<Page>> = _pages
+
+    private val _folders = MutableStateFlow<List<Folder>>(emptyList())
+    val folders: StateFlow<List<Folder>> = _folders
 
     private val _isGeneratingPdf = MutableStateFlow(false)
     val isGeneratingPdf: StateFlow<Boolean> = _isGeneratingPdf
@@ -48,6 +55,11 @@ class DocumentDetailViewModel(application: Application) : AndroidViewModel(appli
                 _pages.value = list
             }
         }
+        viewModelScope.launch {
+            repository.getAllFolders().collectLatest { folderList ->
+                _folders.value = folderList
+            }
+        }
     }
 
     fun renameDocument(newTitle: String) {
@@ -57,6 +69,14 @@ class DocumentDetailViewModel(application: Application) : AndroidViewModel(appli
             val updated = doc.copy(title = newTitle.trim(), modifiedTime = System.currentTimeMillis())
             repository.updateDocument(updated)
             _document.value = updated
+        }
+    }
+
+    fun moveToFolder(folderId: Long) {
+        val doc = _document.value ?: return
+        viewModelScope.launch {
+            repository.moveDocumentToFolder(doc.id, folderId)
+            _document.value = repository.getDocumentById(doc.id)
         }
     }
 
@@ -76,6 +96,32 @@ class DocumentDetailViewModel(application: Application) : AndroidViewModel(appli
         }
     }
 
+    fun reorderPages(orderedPages: List<Page>) {
+        val docId = _document.value?.id ?: return
+        viewModelScope.launch {
+            repository.reorderPages(docId, orderedPages)
+        }
+    }
+
+    fun createCollage(layout: CollageLayout, pageIds: List<Long>, onDone: () -> Unit) {
+        val docId = _document.value?.id ?: return
+        viewModelScope.launch {
+            _isGeneratingPdf.value = true
+            try {
+                repository.createCollagePage(docId, pageIds, layout)
+                withContext(Dispatchers.Main) {
+                    _isGeneratingPdf.value = false
+                    onDone()
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    _isGeneratingPdf.value = false
+                }
+                e.printStackTrace()
+            }
+        }
+    }
+
     fun stampSignature(pageId: Long, signatureBitmap: android.graphics.Bitmap, onDone: () -> Unit) {
         viewModelScope.launch {
             repository.stampSignatureOnPage(pageId, signatureBitmap)
@@ -86,6 +132,40 @@ class DocumentDetailViewModel(application: Application) : AndroidViewModel(appli
             withContext(Dispatchers.Main) {
                 onDone()
             }
+        }
+    }
+
+    fun shareAsImages(context: Context) {
+        val currentPages = _pages.value
+        if (currentPages.isEmpty()) {
+            Toast.makeText(context, "No pages to share", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        try {
+            val uriList = ArrayList<Uri>()
+            for (page in currentPages) {
+                val file = File(page.processedImagePath)
+                if (file.exists()) {
+                    val uri = FileProvider.getUriForFile(
+                        context,
+                        "${context.packageName}.fileprovider",
+                        file
+                    )
+                    uriList.add(uri)
+                }
+            }
+
+            if (uriList.isNotEmpty()) {
+                val intent = Intent(Intent.ACTION_SEND_MULTIPLE).apply {
+                    type = "image/jpeg"
+                    putParcelableArrayListExtra(Intent.EXTRA_STREAM, uriList)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                context.startActivity(Intent.createChooser(intent, "Share Document Images"))
+            }
+        } catch (e: Exception) {
+            Toast.makeText(context, "Failed to share images: ${e.message}", Toast.LENGTH_SHORT).show()
         }
     }
 

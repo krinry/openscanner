@@ -3,12 +3,19 @@ package org.openscanner.data.local
 import androidx.room.*
 import kotlinx.coroutines.flow.Flow
 import org.openscanner.data.model.Document
+import org.openscanner.data.model.Folder
 import org.openscanner.data.model.Page
 
 @Dao
 interface DocumentDao {
     @Query("SELECT * FROM documents ORDER BY modifiedTime DESC")
     fun getAllDocuments(): Flow<List<Document>>
+
+    @Query("SELECT * FROM documents WHERE folderId = :folderId ORDER BY modifiedTime DESC")
+    fun getDocumentsInFolder(folderId: Long): Flow<List<Document>>
+
+    @Query("SELECT * FROM documents WHERE folderId = -1 ORDER BY modifiedTime DESC")
+    fun getRootDocuments(): Flow<List<Document>>
 
     @Query("SELECT * FROM documents WHERE id = :id")
     suspend fun getDocumentById(id: Long): Document?
@@ -30,8 +37,47 @@ interface DocumentDao {
     @Delete
     suspend fun deleteDocument(document: Document)
 
+    @Query("DELETE FROM documents WHERE id IN (:docIds)")
+    suspend fun batchDeleteDocuments(docIds: List<Long>)
+
+    @Query("UPDATE documents SET folderId = :folderId WHERE id = :docId")
+    suspend fun updateDocumentFolder(docId: Long, folderId: Long)
+
+    @Query("UPDATE documents SET folderId = :folderId WHERE id IN (:docIds)")
+    suspend fun batchUpdateFolder(docIds: List<Long>, folderId: Long)
+
+    @Query("UPDATE documents SET folderId = -1 WHERE folderId = :folderId")
+    suspend fun unlinkDocumentsFromFolder(folderId: Long)
+
+    @Query("SELECT COUNT(*) FROM documents WHERE folderId = :folderId")
+    fun getFolderDocCountFlow(folderId: Long): Flow<Int>
+
+    @Query("SELECT COUNT(*) FROM documents WHERE folderId = :folderId")
+    suspend fun getFolderDocCount(folderId: Long): Int
+
     @Query("UPDATE documents SET pageCount = :count, modifiedTime = :time WHERE id = :docId")
     suspend fun updatePageCount(docId: Long, count: Int, time: Long = System.currentTimeMillis())
+}
+
+@Dao
+interface FolderDao {
+    @Query("SELECT * FROM folders ORDER BY orderIndex ASC, createdTime DESC")
+    fun getAllFolders(): Flow<List<Folder>>
+
+    @Query("SELECT * FROM folders WHERE id = :id")
+    suspend fun getFolderById(id: Long): Folder?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertFolder(folder: Folder): Long
+
+    @Update
+    suspend fun updateFolder(folder: Folder)
+
+    @Delete
+    suspend fun deleteFolder(folder: Folder)
+
+    @Query("DELETE FROM folders WHERE id = :folderId")
+    suspend fun deleteFolderById(folderId: Long)
 }
 
 @Dao

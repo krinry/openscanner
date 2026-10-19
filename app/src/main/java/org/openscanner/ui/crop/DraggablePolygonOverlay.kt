@@ -14,7 +14,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import org.openscanner.cv.DocumentQuadrilateral
 import org.openscanner.cv.PointF
-import org.openscanner.ui.theme.OkenGreen
+import org.openscanner.ui.theme.ScannerGreen
 import kotlin.math.hypot
 
 @Composable
@@ -177,22 +177,22 @@ fun DraggablePolygonOverlay(
         // Semi-transparent highlight over document area
         drawPath(
             path = path,
-            color = OkenGreen.copy(alpha = 0.15f)
+            color = ScannerGreen.copy(alpha = 0.15f)
         )
 
         // Boundary lines in signature emerald green
         drawPath(
             path = path,
-            color = OkenGreen,
+            color = ScannerGreen,
             style = Stroke(width = 3.dp.toPx())
         )
 
-        // 4 Corner circular handles (CamScanner Style with white core and green border)
+        // 4 Corner circular handles with white core and green border
         val cornerRadius = 16.dp.toPx()
         listOf(p1, p2, p3, p4).forEach { pt ->
             drawCircle(Color.White, radius = cornerRadius, center = pt)
-            drawCircle(OkenGreen, radius = cornerRadius, center = pt, style = Stroke(3.5.dp.toPx()))
-            drawCircle(OkenGreen, radius = 5.dp.toPx(), center = pt)
+            drawCircle(ScannerGreen, radius = cornerRadius, center = pt, style = Stroke(3.5.dp.toPx()))
+            drawCircle(ScannerGreen, radius = 5.dp.toPx(), center = pt)
         }
 
         // 4 Edge midpoint pill handles
@@ -204,7 +204,7 @@ fun DraggablePolygonOverlay(
 
         listOf(midTop, midRight, midBottom, midLeft).forEach { pt ->
             drawCircle(Color.White, radius = midRadius, center = pt)
-            drawCircle(OkenGreen, radius = midRadius, center = pt, style = Stroke(2.5.dp.toPx()))
+            drawCircle(ScannerGreen, radius = midRadius, center = pt, style = Stroke(2.5.dp.toPx()))
         }
     }
 }

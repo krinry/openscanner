@@ -4,69 +4,53 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 
-// Exact OKEN Scanner / CamScanner Official Color Palette
-val OkenGreen = Color(0xFF018656)          // Primary Brand Emerald Green
-val OkenGreenLight = Color(0xFF00B15F)     // Active / Hover Green
-val OkenGreenDark = Color(0xFF006F4B)      // Pressed / Dark Green
-val OkenGreenContainer = Color(0xFFDCF3EE) // Subtle Green Background Tint
+// OpenScanner Professional Color Palette
+val ScannerGreen = Color(0xFF00BA66)          // Primary Brand Emerald Green
+val ScannerGreenLight = Color(0xFF00D675)     // Active / Highlight Green
+val ScannerGreenDark = Color(0xFF008C4C)      // Pressed / Dark Green
+val ScannerGreenContainer = Color(0xFF1E2822) // Subtle Dark Green Background Tint
+val ScannerFolderYellow = Color(0xFFF0AF3A)   // Standard Folder Manila Yellow
 
-val OkenDarkBar = Color(0xFF1E2939)        // Dark Toolbar / Action Bar
-val OkenSlatePrimary = Color(0xFF34485E)   // Slate Primary (CamScanner Header)
-val OkenSlateDark = Color(0xFF2C3E50)      // Slate Dark
-val OkenNavyDark = Color(0xFF17202B)       // Dark Header Tint
+val ScannerDarkBar = Color(0xFF141414)        // Dark Toolbar / Action Bar
+val ScannerSlatePrimary = Color(0xFF2C3E50)   // Slate Primary
+val ScannerSlateDark = Color(0xFF1C2833)      // Slate Dark
+val ScannerNavyDark = Color(0xFF121212)       // Dark Header Tint
 
-val OkenBgLight = Color(0xFFF4F5F6)        // App Background Light
-val OkenCardBg = Color(0xFFFFFFFF)         // Document Card Background
-val OkenBorderLight = Color(0xFFE5E7EB)    // Card & Divider Border
+val ScannerBgLight = Color(0xFF000000)        // App Background AMOLED Dark
+val ScannerCardBg = Color(0xFF141414)         // Document Card Background
+val ScannerBorderLight = Color(0xFF222222)    // Card & Divider Border
 
-val OkenTextPrimary = Color(0xFF17202B)    // Main Title Text
-val OkenTextSecondary = Color(0xFF7F878E)  // Date / Subtitle Text
-val OkenTextMuted = Color(0xFF9CA3AF)      // Placeholder / Disabled Text
+val ScannerTextPrimary = Color(0xFFFFFFFF)    // Main Title Text
+val ScannerTextSecondary = Color(0xFF8E8E93)  // Date / Subtitle Text
+val ScannerTextMuted = Color(0xFF636366)      // Placeholder / Disabled Text
 
-val OkenBlueAccent = Color(0xFF0D7DFC)     // PDF / Cloud Accent
-val OkenGoldVip = Color(0xFFEDCC8B)        // Premium / VIP Gold Accent
-val OkenRed = Color(0xFFEE3F3F)            // Delete / Alert Red
-
-private val LightColorScheme = lightColorScheme(
-    primary = OkenGreen,
-    onPrimary = Color.White,
-    primaryContainer = OkenGreenContainer,
-    onPrimaryContainer = OkenGreenDark,
-    secondary = OkenSlatePrimary,
-    onSecondary = Color.White,
-    background = OkenBgLight,
-    surface = OkenCardBg,
-    onBackground = OkenTextPrimary,
-    onSurface = OkenTextPrimary,
-    surfaceVariant = Color(0xFFECEFF1),
-    onSurfaceVariant = OkenTextSecondary,
-    outline = OkenBorderLight
-)
+val ScannerBlueAccent = Color(0xFF0D7DFC)     // PDF / Cloud Accent
+val ScannerGoldVip = Color(0xFFEDCC8B)        // Premium Gold Accent
+val ScannerRed = Color(0xFFEE3F3F)            // Delete / Alert Red
 
 private val DarkColorScheme = darkColorScheme(
-    primary = OkenGreenLight,
+    primary = ScannerGreen,
     onPrimary = Color.White,
-    primaryContainer = OkenGreenDark,
+    primaryContainer = ScannerGreenContainer,
     onPrimaryContainer = Color.White,
-    secondary = OkenSlatePrimary,
+    secondary = ScannerSlatePrimary,
     onSecondary = Color.White,
-    background = Color(0xFF121820),
-    surface = Color(0xFF1A222D),
+    background = Color(0xFF000000),
+    surface = Color(0xFF141414),
     onBackground = Color.White,
     onSurface = Color.White,
-    surfaceVariant = Color(0xFF242F3D),
-    onSurfaceVariant = Color(0xFF90A4AE),
-    outline = Color(0xFF374151)
+    surfaceVariant = Color(0xFF1E1E1E),
+    onSurfaceVariant = ScannerTextSecondary,
+    outline = ScannerBorderLight
 )
 
 @Composable
 fun OpenScannerTheme(
-    darkTheme: Boolean = false, // OKEN Scanner default is clean Light Theme with Dark Camera/Crop
+    darkTheme: Boolean = true,
     content: @Composable () -> Unit
 ) {
-    val colors = if (darkTheme) DarkColorScheme else LightColorScheme
     MaterialTheme(
-        colorScheme = colors,
+        colorScheme = DarkColorScheme,
         typography = Typography(),
         content = content
     )

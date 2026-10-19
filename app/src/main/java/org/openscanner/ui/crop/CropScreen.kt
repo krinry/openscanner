@@ -34,7 +34,7 @@ import kotlinx.coroutines.withContext
 import org.openscanner.cv.DocumentQuadrilateral
 import org.openscanner.cv.EdgeDetector
 import org.openscanner.cv.PointF
-import org.openscanner.ui.theme.OkenGreen
+import org.openscanner.ui.theme.ScannerGreen
 import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -159,7 +159,7 @@ fun CropScreen(
                 actions = {
                     Button(
                         onClick = { proceedToNext() },
-                        colors = ButtonDefaults.buttonColors(containerColor = OkenGreen),
+                        colors = ButtonDefaults.buttonColors(containerColor = ScannerGreen),
                         shape = RoundedCornerShape(18.dp),
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp)
                     ) {
@@ -286,7 +286,7 @@ fun CropScreen(
                         )
                     }
                 }
-            } ?: CircularProgressIndicator(color = OkenGreen)
+            } ?: CircularProgressIndicator(color = ScannerGreen)
         }
     }
 }

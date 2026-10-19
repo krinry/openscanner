@@ -32,7 +32,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.openscanner.OpenScannerApp
 import org.openscanner.data.model.Page
-import org.openscanner.ui.theme.OkenGreen
+import org.openscanner.ui.theme.ScannerGreen
 import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -84,7 +84,7 @@ fun PageViewerScreen(
                     }
                     Button(
                         onClick = { showOcrBottomSheet = true },
-                        colors = ButtonDefaults.buttonColors(containerColor = OkenGreen),
+                        colors = ButtonDefaults.buttonColors(containerColor = ScannerGreen),
                         shape = RoundedCornerShape(16.dp),
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
                     ) {
@@ -119,7 +119,7 @@ fun PageViewerScreen(
                         )
                         .transformable(state = transformState)
                 )
-            } ?: CircularProgressIndicator(color = OkenGreen)
+            } ?: CircularProgressIndicator(color = ScannerGreen)
         }
     }
 
@@ -134,7 +134,8 @@ fun PageViewerScreen(
                     val repo = org.openscanner.data.repository.ScannerRepository(
                         context = context,
                         documentDao = app.database.documentDao(),
-                        pageDao = app.database.pageDao()
+                        pageDao = app.database.pageDao(),
+                        folderDao = app.database.folderDao()
                     )
                     repo.stampSignatureOnPage(p.id, sigBmp)
                     withContext(Dispatchers.Main) {
@@ -170,7 +171,7 @@ fun PageViewerScreen(
                             Toast.makeText(context, "Text copied to clipboard", Toast.LENGTH_SHORT).show()
                         }
                     }) {
-                        Icon(Icons.Default.ContentCopy, contentDescription = "Copy", tint = OkenGreen)
+                        Icon(Icons.Default.ContentCopy, contentDescription = "Copy", tint = ScannerGreen)
                     }
                 }
                 Spacer(modifier = Modifier.height(14.dp))

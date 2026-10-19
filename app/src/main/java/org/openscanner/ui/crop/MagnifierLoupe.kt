@@ -17,7 +17,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
-import org.openscanner.ui.theme.OkenGreen
+import org.openscanner.ui.theme.ScannerGreen
 
 @Composable
 fun MagnifierLoupe(
@@ -47,7 +47,7 @@ fun MagnifierLoupe(
             .offset { IntOffset(posX, posY) }
             .size(loupeSize)
             .clip(CircleShape)
-            .border(3.dp, OkenGreen, CircleShape)
+            .border(3.dp, ScannerGreen, CircleShape)
     ) {
         Canvas(modifier = Modifier.size(loupeSize)) {
             val offX = fitRect?.left ?: 0f
@@ -76,8 +76,8 @@ fun MagnifierLoupe(
 
             // Draw center crosshair
             val c = Offset(size.width / 2f, size.height / 2f)
-            drawLine(OkenGreen, Offset(c.x - 16f, c.y), Offset(c.x + 16f, c.y), strokeWidth = 2.5f)
-            drawLine(OkenGreen, Offset(c.x, c.y - 16f), Offset(c.x, c.y + 16f), strokeWidth = 2.5f)
+            drawLine(ScannerGreen, Offset(c.x - 16f, c.y), Offset(c.x + 16f, c.y), strokeWidth = 2.5f)
+            drawLine(ScannerGreen, Offset(c.x, c.y - 16f), Offset(c.x, c.y + 16f), strokeWidth = 2.5f)
         }
     }
 }

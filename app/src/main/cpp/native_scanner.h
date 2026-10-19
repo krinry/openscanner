@@ -24,7 +24,7 @@ struct Quad {
     Point2D bl;
 };
 
-// C++ Algorithm prototypes from OKEN Scanner decompilation
+// C++ Algorithm prototypes for document processing pipeline
 Quad detectDocumentBounds(const uint8_t* grayBuffer, int width, int height);
 void warpPerspectiveNative(
     const uint32_t* srcPixels, int srcW, int srcH,

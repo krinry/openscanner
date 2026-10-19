@@ -14,7 +14,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
 import org.openscanner.camera.CaptureMode
 import org.openscanner.cv.DocumentQuadrilateral
-import org.openscanner.ui.theme.OkenGreen
+import org.openscanner.ui.theme.ScannerGreen
 
 @Composable
 fun ViewfinderOverlay(
@@ -52,8 +52,8 @@ fun ViewfinderOverlay(
                 val cardPath = Path().apply { addRoundRect(cardRect) }
 
                 // Translucent dimming outside card
-                drawPath(cardPath, color = OkenGreen.copy(alpha = 0.12f))
-                drawPath(cardPath, color = OkenGreen, style = Stroke(width = 2.5.dp.toPx()))
+                drawPath(cardPath, color = ScannerGreen.copy(alpha = 0.12f))
+                drawPath(cardPath, color = ScannerGreen, style = Stroke(width = 2.5.dp.toPx()))
 
                 // ID card corner guides
                 val bracketLen = 28.dp.toPx()
@@ -64,7 +64,7 @@ fun ViewfinderOverlay(
                         lineTo(x, y + dy * bracketLen)
                     }
                     drawPath(p, color = Color.White, style = Stroke(width = 4.dp.toPx()))
-                    drawPath(p, color = OkenGreen, style = Stroke(width = 2.dp.toPx()))
+                    drawPath(p, color = ScannerGreen, style = Stroke(width = 2.dp.toPx()))
                 }
                 drawBracket(cardX, cardY, 1f, 1f)
                 drawBracket(cardX + cardW, cardY, -1f, 1f)
@@ -85,8 +85,8 @@ fun ViewfinderOverlay(
                         )
                     )
                 }
-                drawPath(p, color = OkenGreen.copy(alpha = 0.10f))
-                drawPath(p, color = OkenGreen, style = Stroke(width = 2.5.dp.toPx()))
+                drawPath(p, color = ScannerGreen.copy(alpha = 0.10f))
+                drawPath(p, color = ScannerGreen, style = Stroke(width = 2.5.dp.toPx()))
             }
 
             else -> {
@@ -109,11 +109,11 @@ fun ViewfinderOverlay(
                     }
 
                     // Translucent green tint over detected document
-                    drawPath(polyPath, color = OkenGreen.copy(alpha = 0.18f))
+                    drawPath(polyPath, color = ScannerGreen.copy(alpha = 0.18f))
                     // Green boundary outline
-                    drawPath(polyPath, color = OkenGreen, style = Stroke(width = 2.5.dp.toPx()))
+                    drawPath(polyPath, color = ScannerGreen, style = Stroke(width = 2.5.dp.toPx()))
 
-                    // CamScanner signature L-shaped corner brackets
+                    // High-contrast L-shaped corner brackets
                     val bracketLen = 22.dp.toPx()
                     val bracketStroke = Stroke(width = 3.5.dp.toPx())
 
@@ -124,7 +124,7 @@ fun ViewfinderOverlay(
                             lineTo(corner.x, corner.y + dirY * bracketLen)
                         }
                         drawPath(path, color = Color.White, style = bracketStroke)
-                        drawPath(path, color = OkenGreen, style = Stroke(width = 2.dp.toPx()))
+                        drawPath(path, color = ScannerGreen, style = Stroke(width = 2.dp.toPx()))
                     }
 
                     drawCornerBracket(p1, 1f, 1f)   // Top-Left

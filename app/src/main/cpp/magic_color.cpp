@@ -175,7 +175,7 @@ void applyLightenNative(uint32_t* pixels, int width, int height) {
     }
 }
 
-// Shadow Removal (from OKEN deshadowBitmap & Retinex shading correction)
+// Shadow Removal: coarse background grid estimation + Retinex shading correction
 void applyNoShadowNative(uint32_t* pixels, int width, int height) {
     if (!pixels || width <= 0 || height <= 0) return;
 
@@ -250,7 +250,7 @@ void applyNoShadowNative(uint32_t* pixels, int width, int height) {
     }
 }
 
-// Deblur / Sharp Text Filter (from OKEN deblurBitmap Unsharp Mask)
+// Deblur / Sharp Text Filter: 3x3 Laplacian edge difference & unsharp masking
 void applyDeblurNative(uint32_t* pixels, int width, int height) {
     if (!pixels || width < 3 || height < 3) return;
 
@@ -284,7 +284,7 @@ void applyDeblurNative(uint32_t* pixels, int width, int height) {
     }
 }
 
-// Vivid Color Document Filter (OKEN enhance_Color_Image)
+// Vivid Color Document Filter: HSV saturation boost for ink/stamps and paper background whitening
 void applyColorDocNative(uint32_t* pixels, int width, int height) {
     if (!pixels || width <= 0 || height <= 0) return;
     int total = width * height;

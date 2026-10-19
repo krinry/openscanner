@@ -70,11 +70,11 @@ fun FilterScreen(
                         enabled = !isSaving
                     ) {
                         if (isSaving) {
-                            CircularProgressIndicator(color = OkenGreen, modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                            CircularProgressIndicator(color = ScannerGreen, modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
                         } else {
                             Surface(
                                 shape = CircleShape,
-                                color = OkenGreen,
+                                color = ScannerGreen,
                                 modifier = Modifier.size(36.dp)
                             ) {
                                 Box(contentAlignment = Alignment.Center) {
@@ -97,7 +97,7 @@ fun FilterScreen(
                         .fillMaxWidth()
                         .padding(vertical = 12.dp)
                 ) {
-                    // Filter selection carousel with official OKEN Scanner filter thumbnails
+                    // Filter selection carousel with document enhancement thumbnails
                     LazyRow(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(16.dp),
@@ -112,13 +112,13 @@ fun FilterScreen(
                                 Surface(
                                     modifier = Modifier.size(52.dp),
                                     shape = CircleShape,
-                                    color = if (isSelected) OkenGreenContainer else Color(0xFF242424),
-                                    border = if (isSelected) BorderStroke(2.5.dp, OkenGreen) else BorderStroke(1.dp, Color(0xFF404040))
+                                    color = if (isSelected) ScannerGreenContainer else Color(0xFF242424),
+                                    border = if (isSelected) BorderStroke(2.5.dp, ScannerGreen) else BorderStroke(1.dp, Color(0xFF404040))
                                 ) {
                                     Box(contentAlignment = Alignment.Center) {
                                         Text(
                                             text = mode.shortCode,
-                                            color = if (isSelected) OkenGreen else Color.White,
+                                            color = if (isSelected) ScannerGreen else Color.White,
                                             fontWeight = FontWeight.Bold,
                                             fontSize = 12.sp
                                         )
@@ -127,7 +127,7 @@ fun FilterScreen(
                                 Spacer(modifier = Modifier.height(6.dp))
                                 Text(
                                     text = mode.displayName,
-                                    color = if (isSelected) OkenGreen else Color.LightGray,
+                                    color = if (isSelected) ScannerGreen else Color.LightGray,
                                     fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
                                     fontSize = 12.sp
                                 )
@@ -178,7 +178,7 @@ fun FilterScreen(
                         .fillMaxSize()
                         .padding(16.dp)
                 )
-            } ?: CircularProgressIndicator(color = OkenGreen)
+            } ?: CircularProgressIndicator(color = ScannerGreen)
         }
     }
 
@@ -201,8 +201,8 @@ fun FilterScreen(
                     onValueChange = { viewModel.setBrightness(it.toInt()) },
                     valueRange = -80f..80f,
                     colors = SliderDefaults.colors(
-                        thumbColor = OkenGreen,
-                        activeTrackColor = OkenGreen,
+                        thumbColor = ScannerGreen,
+                        activeTrackColor = ScannerGreen,
                         inactiveTrackColor = Color.DarkGray
                     )
                 )
@@ -214,8 +214,8 @@ fun FilterScreen(
                     onValueChange = { viewModel.setContrast(it.toInt()) },
                     valueRange = -80f..80f,
                     colors = SliderDefaults.colors(
-                        thumbColor = OkenGreen,
-                        activeTrackColor = OkenGreen,
+                        thumbColor = ScannerGreen,
+                        activeTrackColor = ScannerGreen,
                         inactiveTrackColor = Color.DarkGray
                     )
                 )
@@ -223,7 +223,7 @@ fun FilterScreen(
                 Spacer(modifier = Modifier.height(24.dp))
                 Button(
                     onClick = { showAdjustDialog = false },
-                    colors = ButtonDefaults.buttonColors(containerColor = OkenGreen),
+                    colors = ButtonDefaults.buttonColors(containerColor = ScannerGreen),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text("Apply")

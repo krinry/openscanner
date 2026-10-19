@@ -32,7 +32,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
-import org.openscanner.ui.theme.OkenGreen
+import org.openscanner.ui.theme.ScannerGreen
 
 data class SignaturePath(
     val path: Path,
@@ -212,7 +212,7 @@ fun SignatureDialog(
                                     .background(inkColor)
                                     .border(
                                         width = if (isSelected) 3.dp else 1.dp,
-                                        color = if (isSelected) OkenGreen else Color.LightGray,
+                                        color = if (isSelected) ScannerGreen else Color.LightGray,
                                         shape = CircleShape
                                     )
                                     .clickable { selectedColor = inkColor },
@@ -279,7 +279,7 @@ fun SignatureDialog(
                         onSignatureCaptured(bitmap)
                     },
                     enabled = paths.isNotEmpty(),
-                    colors = ButtonDefaults.buttonColors(containerColor = OkenGreen),
+                    colors = ButtonDefaults.buttonColors(containerColor = ScannerGreen),
                     shape = RoundedCornerShape(22.dp),
                     modifier = Modifier
                         .fillMaxWidth()
