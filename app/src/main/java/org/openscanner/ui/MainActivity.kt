@@ -17,17 +17,33 @@ import org.openscanner.ui.camera.CameraScreen
 import org.openscanner.ui.crop.CropScreen
 import org.openscanner.ui.detail.DocumentDetailScreen
 import org.openscanner.ui.filter.FilterScreen
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.platform.LocalContext
 import org.openscanner.ui.home.HomeScreen
 import org.openscanner.ui.navigation.Screen
 import org.openscanner.ui.theme.OpenScannerTheme
+import org.openscanner.ui.theme.ThemeManager
 import org.openscanner.ui.viewer.PageViewerScreen
 
 class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        ThemeManager.init(this)
+
         setContent {
-            OpenScannerTheme {
+            val context = LocalContext.current
+            val themeMode by ThemeManager.themeMode.collectAsState()
+            val isDark = when (themeMode) {
+                org.openscanner.ui.theme.AppThemeMode.LIGHT -> false
+                org.openscanner.ui.theme.AppThemeMode.DARK -> true
+                org.openscanner.ui.theme.AppThemeMode.SYSTEM -> ThemeManager.isDark(context)
+            }
+
+            OpenScannerTheme(darkTheme = isDark) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background

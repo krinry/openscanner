@@ -18,12 +18,7 @@ import androidx.compose.ui.unit.sp
 import org.openscanner.pdf.PdfExportOptions
 import org.openscanner.pdf.PdfPageSize
 import org.openscanner.pdf.PdfQuality
-
-private val DarkCard = Color(0xFF141414)
-private val DarkCardBorder = Color(0xFF262626)
-private val DarkTextPrimary = Color(0xFFFFFFFF)
-private val DarkTextSecondary = Color(0xFF8E8E93)
-private val ScannerBrandGreen = Color(0xFF00BA66)
+import org.openscanner.ui.theme.ScannerTheme
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -32,6 +27,7 @@ fun PdfExportDialog(
     onSaveToDownloads: (PdfExportOptions) -> Unit,
     onShare: (PdfExportOptions) -> Unit
 ) {
+    val colors = ScannerTheme.colors
     var selectedPageSize by remember { mutableStateOf(PdfPageSize.A4) }
     var selectedQuality by remember { mutableStateOf(PdfQuality.MEDIUM) }
     var watermarkText by remember { mutableStateOf("") }
@@ -48,15 +44,15 @@ fun PdfExportDialog(
         onDismissRequest = onDismiss,
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.PictureAsPdf, contentDescription = null, tint = ScannerBrandGreen)
+                Icon(Icons.Default.PictureAsPdf, contentDescription = null, tint = colors.primary)
                 Spacer(modifier = Modifier.width(10.dp))
-                Text("Export PDF Settings", color = DarkTextPrimary, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                Text("Export PDF Settings", color = colors.textPrimary, fontWeight = FontWeight.Bold, fontSize = 18.sp)
             }
         },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 // Page size selection
-                Text("Page Size", color = DarkTextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                Text("Page Size", color = colors.textPrimary, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     PdfPageSize.entries.forEach { size ->
                         val isSelected = size == selectedPageSize
@@ -65,62 +61,62 @@ fun PdfExportDialog(
                             onClick = { selectedPageSize = size },
                             label = { Text(if (size == PdfPageSize.A4) "A4" else if (size == PdfPageSize.LETTER) "Letter" else "Fit") },
                             colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = ScannerBrandGreen,
+                                selectedContainerColor = colors.primary,
                                 selectedLabelColor = Color.White,
-                                containerColor = DarkCardBorder,
-                                labelColor = DarkTextPrimary
+                                containerColor = colors.surfaceSecondary,
+                                labelColor = colors.textPrimary
                             )
                         )
                     }
                 }
 
-                // Quality selection
-                Text("File Quality", color = DarkTextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                // File Quality
+                Text("File Quality", color = colors.textPrimary, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    PdfQuality.entries.forEach { q ->
-                        val isSelected = q == selectedQuality
+                    PdfQuality.entries.forEach { quality ->
+                        val isSelected = quality == selectedQuality
                         FilterChip(
                             selected = isSelected,
-                            onClick = { selectedQuality = q },
-                            label = { Text(if (q == PdfQuality.HIGH) "High" else if (q == PdfQuality.MEDIUM) "Normal" else "Small") },
+                            onClick = { selectedQuality = quality },
+                            label = { Text(quality.name.lowercase().replaceFirstChar { it.uppercase() }) },
                             colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = ScannerBrandGreen,
+                                selectedContainerColor = colors.primary,
                                 selectedLabelColor = Color.White,
-                                containerColor = DarkCardBorder,
-                                labelColor = DarkTextPrimary
+                                containerColor = colors.surfaceSecondary,
+                                labelColor = colors.textPrimary
                             )
                         )
                     }
                 }
 
-                // Watermark
+                // Security Watermark
+                Text("Custom Watermark (Optional)", color = colors.textPrimary, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
                 OutlinedTextField(
                     value = watermarkText,
                     onValueChange = { watermarkText = it },
-                    label = { Text("Watermark (e.g. Confidential)", color = DarkTextSecondary) },
+                    placeholder = { Text("e.g. CONFIDENTIAL / DO NOT COPY", color = colors.textMuted, fontSize = 12.sp) },
                     singleLine = true,
-                    shape = RoundedCornerShape(10.dp),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = DarkTextPrimary,
-                        unfocusedTextColor = DarkTextPrimary,
-                        focusedBorderColor = ScannerBrandGreen,
-                        unfocusedBorderColor = DarkCardBorder
+                        focusedTextColor = colors.textPrimary,
+                        unfocusedTextColor = colors.textPrimary,
+                        focusedBorderColor = colors.primary,
+                        unfocusedBorderColor = colors.cardBorder
                     ),
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                // Password
+                // AES Password Protection
+                Text("Password Protection (Optional)", color = colors.textPrimary, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
                 OutlinedTextField(
                     value = password,
                     onValueChange = { password = it },
-                    label = { Text("PDF Password (Optional)", color = DarkTextSecondary) },
+                    placeholder = { Text("Leave empty for no password", color = colors.textMuted, fontSize = 12.sp) },
                     singleLine = true,
-                    shape = RoundedCornerShape(10.dp),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = DarkTextPrimary,
-                        unfocusedTextColor = DarkTextPrimary,
-                        focusedBorderColor = ScannerBrandGreen,
-                        unfocusedBorderColor = DarkCardBorder
+                        focusedTextColor = colors.textPrimary,
+                        unfocusedTextColor = colors.textPrimary,
+                        focusedBorderColor = colors.primary,
+                        unfocusedBorderColor = colors.cardBorder
                     ),
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -131,15 +127,15 @@ fun PdfExportDialog(
                 OutlinedButton(
                     onClick = { onSaveToDownloads(currentOptions()) },
                     shape = RoundedCornerShape(20.dp),
-                    border = BorderStroke(1.dp, DarkCardBorder)
+                    border = BorderStroke(1.dp, colors.cardBorder)
                 ) {
-                    Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp), tint = DarkTextPrimary)
+                    Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp), tint = colors.textPrimary)
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text("Save", color = DarkTextPrimary)
+                    Text("Save", color = colors.textPrimary)
                 }
                 Button(
                     onClick = { onShare(currentOptions()) },
-                    colors = ButtonDefaults.buttonColors(containerColor = ScannerBrandGreen),
+                    colors = ButtonDefaults.buttonColors(containerColor = colors.primary),
                     shape = RoundedCornerShape(20.dp)
                 ) {
                     Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color.White)
@@ -150,10 +146,10 @@ fun PdfExportDialog(
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("Cancel", color = DarkTextSecondary)
+                Text("Cancel", color = colors.textSecondary)
             }
         },
-        containerColor = DarkCard,
+        containerColor = colors.surface,
         shape = RoundedCornerShape(16.dp)
     )
 }
