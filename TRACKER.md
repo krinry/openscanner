@@ -60,7 +60,7 @@
 | **Legal & Compliance** | 100% Original OpenScanner Branding | ✅ Completed | Yes |
 | | Zero third-party trademarks or competitor names in code/branches | ✅ Completed | Yes |
 | | Zero proprietary binary assets or closed-source media | ✅ Completed | Yes |
-| | Complete Documentation Suite (`PRD`, `ARCHITECTURE`, `DESIGN`, `MEMORY`, `RULES`, `TRACKER`) | ✅ Completed | Yes |
+| | Complete Documentation Suite (`PRD`, `ARCHITECTURE`, `DESIGN`, `CONTEXT`, `RULES`, `TRACKER`) | ✅ Completed | Yes |
 
 ---
 
@@ -70,7 +70,7 @@
 * **Dual-Theme Engine:** Added seamless Light & Dark theme architecture with `ThemeManager`, instant `HomeTopBar` ☀️/🌙 toggle, and edge-to-edge system navigation bar contrast synchronization.
 * **Component-Driven Modularization:** Refactored monolithic screen files into decoupled components under `org.openscanner.ui.home.components`, `org.openscanner.ui.home.dialogs`, `org.openscanner.ui.detail.components`, and `org.openscanner.ui.detail.dialogs`.
 * **Zero-Branding Audit & Legal Compliance:** Completely eliminated all third-party brand names and competitor references across source code, comments, theme identifiers, and git branch names. Deleted all legacy branches with third-party names.
-* **Full Documentation Suite:** Created `PRD.md`, `ARCHITECTURE.md`, `DESIGN.md`, `MEMORY.md`, `RULES.md`, and `TRACKER.md`.
+* **Full Documentation Suite:** Created `PRD.md`, `ARCHITECTURE.md`, `DESIGN.md`, `CONTEXT.md`, `RULES.md`, and `TRACKER.md`.
 
 ---
 
