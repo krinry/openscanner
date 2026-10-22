@@ -7,15 +7,15 @@ Welcome to **OpenScanner**. This document defines the mandatory engineering, leg
 ## 1. Absolute Legal & Branding Rules (Zero Tolerance)
 
 ### 1.1 Zero Proprietary Assets
-* **Never** commit, extract, copy, or embed proprietary binary assets, copyrighted PNGs/JPGs/SVGs, proprietary fonts, or media from closed-source or commercial applications (e.g., OKEN Scanner, CamScanner, Adobe Scan, Microsoft Lens).
+* **Never** commit, extract, copy, or embed proprietary binary assets, copyrighted PNGs/JPGs/SVGs, proprietary fonts, or media from closed-source or commercial applications.
 * All user interface graphics must be generated dynamically using Jetpack Compose `Canvas`, vector graphics (`ImageVector`), or standard Material 3 icons from `androidx.compose.material.icons.*`.
 * All algorithms must be independent, clean-room implementations using open standards (OpenCV, Google ML Kit, Android Jetpack).
 
 ### 1.2 Zero Trademarked / Proprietary Branding
-* **Never** use third-party trademarked names (such as "OKEN", "CamScanner", etc.) in:
+* **Never** use third-party trademarked names or competitor brand identities in:
   - App titles, headers, logos, or user-facing strings
   - Package names, class names, function names, or variable identifiers
-  - Theme constants (e.g., use `ScannerGreen`, `ScannerFolderYellow`, `OpenScannerDarkTheme` — NEVER `OkenGreen`, etc.)
+  - Theme constants (e.g., use `ScannerGreen`, `ScannerFolderYellow`, `OpenScannerDarkTheme`, etc.)
   - Documentation, commit messages, or metadata
 * The official project identity is exclusively **OpenScanner**.
 
