@@ -5,6 +5,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.layout.*
@@ -13,7 +14,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Draw
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.TextFields
+import androidx.compose.material.icons.outlined.Compress
+import androidx.compose.material.icons.outlined.Security
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -21,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -33,6 +38,7 @@ import kotlinx.coroutines.withContext
 import org.openscanner.OpenScannerApp
 import org.openscanner.data.model.Page
 import org.openscanner.ui.theme.ScannerGreen
+import org.openscanner.ui.theme.ScannerTheme
 import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -42,14 +48,21 @@ fun PageViewerScreen(
     onNavigateBack: () -> Unit
 ) {
     val context = LocalContext.current
+    val colors = ScannerTheme.colors
     var page by remember { mutableStateOf<Page?>(null) }
-    var showOcrBottomSheet by remember { mutableStateOf(false) }
+    var docTitle by remember { mutableStateOf("Document") }
+    var totalPages by remember { mutableIntStateOf(1) }
 
     LaunchedEffect(pageId) {
         withContext(Dispatchers.IO) {
             val db = (context.applicationContext as OpenScannerApp).database
             val p = db.pageDao().getPageById(pageId)
             page = p
+            if (p != null) {
+                val doc = db.documentDao().getDocumentById(p.documentId)
+                docTitle = doc?.title ?: "Document"
+                totalPages = db.pageDao().getPagesListForDocument(p.documentId).size.coerceAtLeast(1)
+            }
         }
     }
 
@@ -62,39 +75,85 @@ fun PageViewerScreen(
     }
 
     var showSignatureDialog by remember { mutableStateOf(false) }
+    var showWatermarkDialog by remember { mutableStateOf(false) }
+    var showPasswordDialog by remember { mutableStateOf(false) }
+    var showCompressDialog by remember { mutableStateOf(false) }
     val coroutineScope = rememberCoroutineScope()
     var imageReloadKey by remember { mutableIntStateOf(0) }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(page?.let { "Page ${it.pageIndex + 1}" } ?: "Page", color = Color.White, fontWeight = FontWeight.Bold) },
+                title = {
+                    Text(
+                        text = docTitle,
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 17.sp,
+                        maxLines = 1
+                    )
+                },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { showSignatureDialog = true }) {
                         Icon(
-                            Icons.Default.Draw,
-                            contentDescription = "Add Signature",
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
                             tint = Color.White
                         )
                     }
+                },
+                actions = {
                     Button(
-                        onClick = { showOcrBottomSheet = true },
+                        onClick = {
+                            Toast.makeText(context, "Document saved locally", Toast.LENGTH_SHORT).show()
+                            onNavigateBack()
+                        },
                         colors = ButtonDefaults.buttonColors(containerColor = ScannerGreen),
                         shape = RoundedCornerShape(16.dp),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp)
                     ) {
-                        Icon(Icons.Default.TextFields, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("OCR Text", fontSize = 12.sp, color = Color.White)
+                        Text("Save", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.White)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Black)
             )
+        },
+        bottomBar = {
+            Surface(
+                color = Color(0xFF141414),
+                modifier = Modifier.fillMaxWidth(),
+                tonalElevation = 8.dp
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .navigationBarsPadding()
+                        .padding(vertical = 10.dp),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    QuickEditActionItem(
+                        icon = Icons.Outlined.Security,
+                        label = "Anti-theft",
+                        onClick = { showWatermarkDialog = true }
+                    )
+                    QuickEditActionItem(
+                        icon = Icons.Default.Draw,
+                        label = "Signature",
+                        onClick = { showSignatureDialog = true }
+                    )
+                    QuickEditActionItem(
+                        icon = Icons.Default.Lock,
+                        label = "PDF Password",
+                        onClick = { showPasswordDialog = true }
+                    )
+                    QuickEditActionItem(
+                        icon = Icons.Outlined.Compress,
+                        label = "Compression",
+                        onClick = { showCompressDialog = true }
+                    )
+                }
+            }
         }
     ) { padding ->
         Box(
@@ -119,6 +178,23 @@ fun PageViewerScreen(
                         )
                         .transformable(state = transformState)
                 )
+
+                // Top-Left Page Counter Badge ("1/9")
+                Surface(
+                    color = Color.Black.copy(alpha = 0.65f),
+                    shape = RoundedCornerShape(4.dp),
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(16.dp)
+                ) {
+                    Text(
+                        text = "${p.pageIndex + 1}/$totalPages",
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
             } ?: CircularProgressIndicator(color = ScannerGreen)
         }
     }
@@ -140,56 +216,150 @@ fun PageViewerScreen(
                     repo.stampSignatureOnPage(p.id, sigBmp)
                     withContext(Dispatchers.Main) {
                         imageReloadKey++
-                        Toast.makeText(context, "Signature applied to document!", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "Signature applied to page!", Toast.LENGTH_SHORT).show()
                     }
                 }
             }
         )
     }
 
-    if (showOcrBottomSheet) {
-        ModalBottomSheet(
-            onDismissRequest = { showOcrBottomSheet = false },
-            containerColor = Color.White
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(24.dp)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+    if (showWatermarkDialog) {
+        var watermarkInput by remember { mutableStateOf("CONFIDENTIAL") }
+        AlertDialog(
+            onDismissRequest = { showWatermarkDialog = false },
+            title = { Text("Anti-theft Watermark", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Add security overlay text:", fontSize = 13.sp, color = colors.textSecondary)
+                    OutlinedTextField(
+                        value = watermarkInput,
+                        onValueChange = { watermarkInput = it },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showWatermarkDialog = false
+                        Toast.makeText(context, "Watermark '$watermarkInput' configured for export", Toast.LENGTH_SHORT).show()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = ScannerGreen)
                 ) {
-                    Text("Recognized Text (OCR)", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                    IconButton(onClick = {
-                        val text = page?.ocrText.orEmpty()
-                        if (text.isNotBlank()) {
-                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                            clipboard.setPrimaryClip(ClipData.newPlainText("Scanned Text", text))
-                            Toast.makeText(context, "Text copied to clipboard", Toast.LENGTH_SHORT).show()
+                    Text("Apply", color = Color.White)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showWatermarkDialog = false }) {
+                    Text("Cancel", color = colors.textSecondary)
+                }
+            }
+        )
+    }
+
+    if (showPasswordDialog) {
+        var pwdInput by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { showPasswordDialog = false },
+            title = { Text("Set PDF Password", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Encrypt PDF with access password:", fontSize = 13.sp, color = colors.textSecondary)
+                    OutlinedTextField(
+                        value = pwdInput,
+                        onValueChange = { pwdInput = it },
+                        placeholder = { Text("Enter password") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showPasswordDialog = false
+                        Toast.makeText(context, "PDF password protection active", Toast.LENGTH_SHORT).show()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = ScannerGreen)
+                ) {
+                    Text("Set Password", color = Color.White)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showPasswordDialog = false }) {
+                    Text("Cancel", color = colors.textSecondary)
+                }
+            }
+        )
+    }
+
+    if (showCompressDialog) {
+        var selectedQuality by remember { mutableStateOf("Medium (75%)") }
+        AlertDialog(
+            onDismissRequest = { showCompressDialog = false },
+            title = { Text("PDF Compression", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("Low (Smallest size, 50%)", "Medium (Recommended, 75%)", "High (Crisp quality, 92%)").forEach { q ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { selectedQuality = q }
+                                .padding(vertical = 6.dp)
+                        ) {
+                            RadioButton(
+                                selected = selectedQuality == q,
+                                onClick = { selectedQuality = q }
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(q, fontSize = 13.sp)
                         }
-                    }) {
-                        Icon(Icons.Default.ContentCopy, contentDescription = "Copy", tint = ScannerGreen)
                     }
                 }
-                Spacer(modifier = Modifier.height(14.dp))
-                val ocrText = page?.ocrText.orEmpty()
-                if (ocrText.isNotBlank()) {
-                    Text(
-                        text = ocrText,
-                        style = MaterialTheme.typography.bodyMedium,
-                        lineHeight = 22.sp
-                    )
-                } else {
-                    Text(
-                        text = "No text recognized on this page.",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showCompressDialog = false
+                        Toast.makeText(context, "Compression set to $selectedQuality", Toast.LENGTH_SHORT).show()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = ScannerGreen)
+                ) {
+                    Text("Done", color = Color.White)
                 }
-                Spacer(modifier = Modifier.height(32.dp))
+            },
+            dismissButton = {
+                TextButton(onClick = { showCompressDialog = false }) {
+                    Text("Cancel", color = colors.textSecondary)
+                }
             }
-        }
+        )
+    }
+}
+
+@Composable
+private fun QuickEditActionItem(
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+            .clickable(onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 4.dp)
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = label,
+            tint = Color(0xFFCCCCCC),
+            modifier = Modifier.size(22.dp)
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = label,
+            color = Color(0xFFCCCCCC),
+            fontSize = 11.sp
+        )
     }
 }

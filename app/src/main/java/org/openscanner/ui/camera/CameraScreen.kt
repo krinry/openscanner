@@ -2,6 +2,10 @@ package org.openscanner.ui.camera
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.*
@@ -14,9 +18,11 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
@@ -25,26 +31,29 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.widget.Toast
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.openscanner.OpenScannerApp
-import org.openscanner.R
 import org.openscanner.camera.CaptureMode
 import org.openscanner.camera.DocumentAnalyzer
+import org.openscanner.cv.BookSpineDetector
+import org.openscanner.cv.IdCardCropper
+import org.openscanner.data.repository.ScannerRepository
 import org.openscanner.ui.theme.ScannerGreen
+import java.io.File
 import java.util.concurrent.Executors
 
 @Composable
@@ -74,7 +83,7 @@ fun CameraScreen(
         onResult = { uri ->
             uri?.let {
                 try {
-                    val targetFile = java.io.File(context.cacheDir, "gallery_${System.currentTimeMillis()}.jpg")
+                    val targetFile = File(context.cacheDir, "gallery_${System.currentTimeMillis()}.jpg")
                     context.contentResolver.openInputStream(it)?.use { input ->
                         targetFile.outputStream().use { output ->
                             input.copyTo(output)
@@ -110,12 +119,53 @@ fun CameraScreen(
     val previewDimens by viewModel.previewDimens.collectAsState()
     val flashMode by viewModel.flashMode.collectAsState()
     val batchCount by viewModel.batchCount.collectAsState()
+    val batchQueue by viewModel.batchQueue.collectAsState()
 
     var showGrid by remember { mutableStateOf(false) }
     var autoCropEnabled by remember { mutableStateOf(true) }
     var imageCapture: ImageCapture? by remember { mutableStateOf(null) }
     var idCardFrontBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var showBatchReview by remember { mutableStateOf(false) }
+    var viewLayoutSize by remember { mutableStateOf(IntSize.Zero) }
+    var showDiscardDialog by remember { mutableStateOf(false) }
     val coroutineScope = rememberCoroutineScope()
+
+    val handleBack = {
+        if (currentMode == CaptureMode.ID_CARD && idCardFrontBitmap != null) {
+            showDiscardDialog = true
+        } else {
+            onClose()
+        }
+    }
+
+    BackHandler(enabled = true) {
+        handleBack()
+    }
+
+    if (showDiscardDialog) {
+        AlertDialog(
+            onDismissRequest = { showDiscardDialog = false },
+            title = { Text("Discard Front Side?", fontWeight = FontWeight.Bold) },
+            text = { Text("Discard front side and exit?") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showDiscardDialog = false
+                        idCardFrontBitmap?.recycle()
+                        idCardFrontBitmap = null
+                        onClose()
+                    }
+                ) {
+                    Text("Discard", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDiscardDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
 
     val flashIcon = when (flashMode) {
         ImageCapture.FLASH_MODE_ON -> Icons.Default.FlashOn
@@ -123,7 +173,12 @@ fun CameraScreen(
         else -> Icons.Default.FlashOff
     }
 
-    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+            .onSizeChanged { viewLayoutSize = it }
+    ) {
         // CameraX Live Preview
         AndroidView(
             modifier = Modifier.fillMaxSize(),
@@ -173,36 +228,15 @@ fun CameraScreen(
             }
         )
 
-        // Green boundary overlay with corner brackets & grid
+        // Viewfinder overlay with dynamic guides (ID Card, Book spine/badges, QR, Quad)
         ViewfinderOverlay(
             mode = currentMode,
             quad = if (autoCropEnabled) detectedQuad else null,
             previewWidth = previewDimens.first,
             previewHeight = previewDimens.second,
-            showGrid = showGrid
+            showGrid = showGrid,
+            idCardStep = if (idCardFrontBitmap == null) 1 else 2
         )
-
-        // Guide pill for ID Card & QR
-        if (currentMode == CaptureMode.ID_CARD || currentMode == CaptureMode.QR_CODE) {
-            Surface(
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(top = 96.dp),
-                color = Color.Black.copy(alpha = 0.75f),
-                shape = RoundedCornerShape(16.dp),
-                border = androidx.compose.foundation.BorderStroke(1.dp, ScannerGreen)
-            ) {
-                Text(
-                    text = if (currentMode == CaptureMode.ID_CARD) {
-                        if (idCardFrontBitmap == null) "Step 1 of 2: Align FRONT of ID Card" else "Step 2 of 2: Align BACK of ID Card"
-                    } else "Align QR code within the frame",
-                    color = Color.White,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 12.sp,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 7.dp)
-                )
-            }
-        }
 
         // Top Control Bar
         Row(
@@ -212,7 +246,7 @@ fun CameraScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(onClick = onClose) {
+            IconButton(onClick = handleBack) {
                 Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White)
             }
 
@@ -253,20 +287,109 @@ fun CameraScreen(
             }
         }
 
-        // Bottom Controls: Modes Carousel + Camera Shutter
+        // Bottom Controls: Modes Carousel + Filmstrip + Camera Shutter
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .align(Alignment.BottomCenter)
                 .background(Color.Black.copy(alpha = 0.65f))
-                .padding(bottom = 36.dp, top = 16.dp),
+                .padding(bottom = 36.dp, top = 12.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            // Batch Mode Filmstrip Queue
+            if (currentMode == CaptureMode.BATCH && batchQueue.isNotEmpty()) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "${batchQueue.size} pages captured",
+                            color = Color.White,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = "Tap to review",
+                            color = ScannerGreen,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.clickable { showBatchReview = true }
+                        )
+                    }
+
+                    LazyRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        contentPadding = PaddingValues(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        itemsIndexed(batchQueue, key = { _, item -> item.id }) { index, item ->
+                            Box(
+                                modifier = Modifier
+                                    .size(width = 62.dp, height = 82.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .border(1.5.dp, Color.White.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
+                                    .clickable { showBatchReview = true }
+                            ) {
+                                Image(
+                                    bitmap = item.thumbnailBitmap.asImageBitmap(),
+                                    contentDescription = "Page ${index + 1}",
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+
+                                Surface(
+                                    modifier = Modifier
+                                        .align(Alignment.BottomStart)
+                                        .padding(3.dp),
+                                    shape = RoundedCornerShape(4.dp),
+                                    color = Color.Black.copy(alpha = 0.7f)
+                                ) {
+                                    Text(
+                                        text = "${index + 1}",
+                                        color = Color.White,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                    )
+                                }
+
+                                Box(
+                                    modifier = Modifier
+                                        .align(Alignment.TopEnd)
+                                        .padding(2.dp)
+                                        .size(18.dp)
+                                        .clip(CircleShape)
+                                        .background(Color.Black.copy(alpha = 0.75f))
+                                        .clickable { viewModel.removeBatchItem(item.id) },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        Icons.Default.Close,
+                                        contentDescription = "Remove page",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(12.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // Mode Carousel
             LazyRow(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(bottom = 24.dp),
+                    .padding(bottom = 20.dp),
                 horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -320,91 +443,227 @@ fun CameraScreen(
                     )
                 }
 
-                // Camera Shutter Button
-                Box(
-                    modifier = Modifier
-                        .size(80.dp)
-                        .border(4.dp, Color.White, CircleShape)
-                        .padding(5.dp)
-                        .clip(CircleShape)
-                        .background(ScannerGreen)
-                        .clickable {
-                            imageCapture?.let { capture ->
-                                if (currentMode == CaptureMode.ID_CARD) {
-                                    viewModel.capturePhoto(
-                                        imageCapture = capture,
-                                        onPhotoCaptured = { savedPath ->
-                                            val bmp = BitmapFactory.decodeFile(savedPath)
-                                            if (bmp != null) {
-                                                if (idCardFrontBitmap == null) {
-                                                    idCardFrontBitmap = bmp
-                                                    Toast.makeText(context, "Front side saved! Now capture Back side.", Toast.LENGTH_SHORT).show()
-                                                } else {
-                                                    val front = idCardFrontBitmap!!
-                                                    coroutineScope.launch(Dispatchers.IO) {
-                                                        val app = context.applicationContext as OpenScannerApp
-                                                        val repo = org.openscanner.data.repository.ScannerRepository(
-                                                            context = context,
-                                                            documentDao = app.database.documentDao(),
-                                                            pageDao = app.database.pageDao(),
-                                                            folderDao = app.database.folderDao()
-                                                        )
-                                                        val targetDocId = if (docId > 0) docId else repo.createNewDocument("ID Card Scan")
-                                                        repo.stitchIdCardPages(front, bmp, targetDocId)
-                                                        withContext(Dispatchers.Main) {
-                                                            idCardFrontBitmap = null
-                                                            Toast.makeText(context, "ID Card 2-sided scan created!", Toast.LENGTH_LONG).show()
-                                                            onClose()
+                // Camera Shutter Button with Badge
+                Box(modifier = Modifier.size(80.dp), contentAlignment = Alignment.Center) {
+                    Box(
+                        modifier = Modifier
+                            .size(80.dp)
+                            .border(4.dp, Color.White, CircleShape)
+                            .padding(5.dp)
+                            .clip(CircleShape)
+                            .background(ScannerGreen)
+                            .clickable {
+                                imageCapture?.let { capture ->
+                                    when (currentMode) {
+                                        CaptureMode.BATCH -> {
+                                            viewModel.captureBatchPhoto(
+                                                imageCapture = capture,
+                                                onSuccess = { /* Batch item added */ },
+                                                onError = { Toast.makeText(context, "Batch capture failed", Toast.LENGTH_SHORT).show() }
+                                            )
+                                        }
+                                        CaptureMode.ID_CARD -> {
+                                            viewModel.capturePhoto(
+                                                imageCapture = capture,
+                                                onPhotoCaptured = { savedPath ->
+                                                    coroutineScope.launch(Dispatchers.Default) {
+                                                        val rawBitmap = BitmapFactory.decodeFile(savedPath)
+                                                        if (rawBitmap != null) {
+                                                            val cropW = if (viewLayoutSize.width > 0) viewLayoutSize.width else rawBitmap.width
+                                                            val cropH = if (viewLayoutSize.height > 0) viewLayoutSize.height else rawBitmap.height
+                                                            val croppedCard = IdCardCropper.cropCard(rawBitmap, cropW, cropH)
+                                                            if (rawBitmap != croppedCard && !rawBitmap.isRecycled) {
+                                                                rawBitmap.recycle()
+                                                            }
+                                                            try {
+                                                                File(savedPath).delete()
+                                                            } catch (e: Exception) { /* Ignore */ }
+
+                                                            withContext(Dispatchers.Main) {
+                                                                if (idCardFrontBitmap == null) {
+                                                                    idCardFrontBitmap = croppedCard
+                                                                    Toast.makeText(context, "Front side saved! Now capture Back side.", Toast.LENGTH_SHORT).show()
+                                                                } else {
+                                                                    val front = idCardFrontBitmap!!
+                                                                    val back = croppedCard
+                                                                    coroutineScope.launch(Dispatchers.IO) {
+                                                                        val app = context.applicationContext as OpenScannerApp
+                                                                        val repo = ScannerRepository(
+                                                                            context = context,
+                                                                            documentDao = app.database.documentDao(),
+                                                                            pageDao = app.database.pageDao(),
+                                                                            folderDao = app.database.folderDao()
+                                                                        )
+                                                                        val targetDocId = if (docId > 0) docId else null
+                                                                        repo.stitchIdCardPages(front, back, targetDocId)
+                                                                        if (!front.isRecycled) front.recycle()
+                                                                        if (!back.isRecycled) back.recycle()
+                                                                        withContext(Dispatchers.Main) {
+                                                                            idCardFrontBitmap = null
+                                                                            Toast.makeText(context, "ID Card 2-sided scan created!", Toast.LENGTH_LONG).show()
+                                                                            onClose()
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
                                                         }
                                                     }
-                                                }
-                                            }
-                                        },
-                                        onError = { Toast.makeText(context, "Capture failed", Toast.LENGTH_SHORT).show() }
-                                    )
-                                } else {
-                                    viewModel.capturePhoto(
-                                        imageCapture = capture,
-                                        onPhotoCaptured = { savedPath ->
-                                            onPhotoCaptured(savedPath, docId)
-                                        },
-                                        onError = { /* Log error */ }
-                                    )
+                                                },
+                                                onError = { Toast.makeText(context, "Capture failed", Toast.LENGTH_SHORT).show() }
+                                            )
+                                        }
+                                        CaptureMode.BOOK -> {
+                                            viewModel.capturePhoto(
+                                                imageCapture = capture,
+                                                onPhotoCaptured = { savedPath ->
+                                                    coroutineScope.launch(Dispatchers.IO) {
+                                                        val bmp = BitmapFactory.decodeFile(savedPath)
+                                                        if (bmp != null) {
+                                                            val spineX = BookSpineDetector.detectSpine(bmp)
+                                                            val app = context.applicationContext as OpenScannerApp
+                                                            val repo = ScannerRepository(
+                                                                context = context,
+                                                                documentDao = app.database.documentDao(),
+                                                                pageDao = app.database.pageDao(),
+                                                                folderDao = app.database.folderDao()
+                                                            )
+                                                            val targetDocId = if (docId > 0) docId else null
+                                                            repo.splitAndSaveBookPages(bmp, spineX, targetDocId)
+                                                            if (!bmp.isRecycled) bmp.recycle()
+                                                            try {
+                                                                File(savedPath).delete()
+                                                            } catch (e: Exception) { /* Ignore */ }
+                                                            withContext(Dispatchers.Main) {
+                                                                Toast.makeText(context, "Book pages split & saved!", Toast.LENGTH_SHORT).show()
+                                                                onClose()
+                                                            }
+                                                        }
+                                                    }
+                                                },
+                                                onError = { Toast.makeText(context, "Capture failed", Toast.LENGTH_SHORT).show() }
+                                            )
+                                        }
+                                        else -> {
+                                            viewModel.capturePhoto(
+                                                imageCapture = capture,
+                                                onPhotoCaptured = { savedPath ->
+                                                    onPhotoCaptured(savedPath, docId)
+                                                },
+                                                onError = { /* Log error */ }
+                                            )
+                                        }
+                                    }
                                 }
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.Default.CameraAlt,
+                            contentDescription = "Capture",
+                            tint = Color.White,
+                            modifier = Modifier.size(34.dp)
+                        )
+                    }
+
+                    // Shutter badge for Batch mode
+                    if (currentMode == CaptureMode.BATCH && batchCount > 0) {
+                        Surface(
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .size(24.dp),
+                            shape = CircleShape,
+                            color = ScannerGreen,
+                            border = androidx.compose.foundation.BorderStroke(1.5.dp, Color.White)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Text(
+                                    text = batchCount.toString(),
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 11.sp
+                                )
                             }
-                        },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        Icons.Default.CameraAlt,
-                        contentDescription = "Capture",
-                        tint = Color.White,
-                        modifier = Modifier.size(34.dp)
-                    )
+                        }
+                    }
                 }
 
-                // Batch Mode Counter
+                // Right slot: Review action (BATCH), Front thumbnail (ID_CARD Step 2), or Spacer
                 if (currentMode == CaptureMode.BATCH && batchCount > 0) {
                     Surface(
                         modifier = Modifier
-                            .size(48.dp)
+                            .size(52.dp)
                             .clip(CircleShape)
-                            .clickable { onClose() },
-                        color = ScannerGreen
+                            .clickable { showBatchReview = true },
+                        color = ScannerGreen,
+                        shadowElevation = 6.dp
                     ) {
                         Box(contentAlignment = Alignment.Center) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Icon(
+                                    Icons.AutoMirrored.Filled.ArrowForward,
+                                    contentDescription = "Review Batch",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                                Text(
+                                    text = "$batchCount",
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 11.sp
+                                )
+                            }
+                        }
+                    }
+                } else if (currentMode == CaptureMode.ID_CARD && idCardFrontBitmap != null) {
+                    Box(
+                        modifier = Modifier
+                            .size(width = 56.dp, height = 40.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .border(2.dp, ScannerGreen, RoundedCornerShape(6.dp))
+                            .background(Color.Black),
+                        contentAlignment = Alignment.BottomCenter
+                    ) {
+                        Image(
+                            bitmap = idCardFrontBitmap!!.asImageBitmap(),
+                            contentDescription = "Front ID Card",
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop
+                        )
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            color = ScannerGreen.copy(alpha = 0.85f)
+                        ) {
                             Text(
-                                text = batchCount.toString(),
+                                text = "FRONT",
                                 color = Color.White,
+                                fontSize = 8.sp,
                                 fontWeight = FontWeight.Bold,
-                                fontSize = 16.sp
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                modifier = Modifier.padding(vertical = 1.dp)
                             )
                         }
                     }
                 } else {
-                    Spacer(modifier = Modifier.size(48.dp))
+                    Spacer(modifier = Modifier.size(52.dp))
                 }
             }
+        }
+
+        // Full-page Batch Review Screen Overlay
+        if (showBatchReview && batchQueue.isNotEmpty()) {
+            BatchReviewScreen(
+                docId = docId,
+                batchQueue = batchQueue,
+                onRotateItem = { id, clockwise -> viewModel.rotateBatchItem(id, clockwise) },
+                onRemoveItem = { id -> viewModel.removeBatchItem(id) },
+                onUpdateCropQuad = { id, quad -> viewModel.updateBatchItemCrop(id, quad) },
+                onClose = { showBatchReview = false },
+                onBatchSaved = { savedDocId ->
+                    viewModel.clearBatch()
+                    showBatchReview = false
+                    onClose()
+                }
+            )
         }
     }
 }

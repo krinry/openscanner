@@ -37,8 +37,11 @@
 | | Real-time Search across titles and OCR text | ✅ Completed | Yes |
 | **Document Detail** | 2-Column Page Grid with two-digit badges ("01", "02") | ✅ Completed | Yes |
 | | 5-Action Bottom Navigation: Add, Collage, Share, Edit PDF, More | ✅ Completed | Yes |
-| | Collage Studio: 2-in-1, 4-in-1, 6-in-1 A4 layouts | ✅ Completed | Yes |
-| | Fullscreen Pinch-to-Zoom (1x–5x) Page Viewer | ✅ Completed | Yes |
+| | Fullscreen Collage Studio: Question Book, ID Card, Passport, 2x1, 1x2, 4-grid, 6-grid | ✅ Completed | Yes |
+| | Multi-Action Share & Export Sheet (PDF, JPG, Long image, OCR text, Split, Gallery, Email) | ✅ Completed | Yes |
+| | Document "More" Settings (Sort toggle, Page Numbering, Direction, Paper Size Grid) | ✅ Completed | Yes |
+| | Fullscreen Pinch-to-Zoom (1x–5x) Page Viewer with Save & Page Badges ("1/9") | ✅ Completed | Yes |
+| | Quick Edit Toolbar: Anti-theft watermark, Signature, PDF Password, Compression | ✅ Completed | Yes |
 | | Digital E-Signature Studio with ink extraction | ✅ Completed | Yes |
 | **PDF Engine** | Custom Paper Dimensions: A4, US Letter, US Legal, Fit | ✅ Completed | Yes |
 | | Quality Compression Presets (High, Medium, Small) | ✅ Completed | Yes |

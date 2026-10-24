@@ -16,7 +16,7 @@ import org.openscanner.cv.DocumentQuadrilateral
 import org.openscanner.cv.NativeScannerEngine
 import org.openscanner.data.model.EnhanceMode
 import org.openscanner.data.repository.ScannerRepository
-import org.openscanner.ocr.OcrEngine
+import org.openscanner.cv.OcrEngine
 import java.io.File
 import kotlin.math.max
 

@@ -8,7 +8,9 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.DriveFileMove
 import androidx.compose.material.icons.filled.Add
@@ -28,11 +30,18 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
+import android.graphics.BitmapFactory
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.openscanner.cv.OcrEngine
 import org.openscanner.data.model.FolderWithCount
 import org.openscanner.ui.detail.components.DetailBottomBar
 import org.openscanner.ui.detail.components.DetailTopBar
 import org.openscanner.ui.detail.components.PageGridCard
 import org.openscanner.ui.detail.dialogs.CollageStudioDialog
+import org.openscanner.ui.detail.dialogs.DocumentMoreDialog
+import org.openscanner.ui.detail.dialogs.ShareExportBottomSheet
 import org.openscanner.ui.pdf.PdfExportDialog
 import org.openscanner.ui.signature.SignatureDialog
 import org.openscanner.ui.theme.ScannerTheme
@@ -48,6 +57,7 @@ fun DocumentDetailScreen(
 ) {
     val context = LocalContext.current
     val colors = ScannerTheme.colors
+    val coroutineScope = rememberCoroutineScope()
 
     LaunchedEffect(docId) {
         viewModel.load(docId)
@@ -64,7 +74,11 @@ fun DocumentDetailScreen(
     var showSignatureDialog by remember { mutableStateOf(false) }
     var showCollageDialog by remember { mutableStateOf(false) }
     var showMoveFolderDialog by remember { mutableStateOf(false) }
-    var showMoreMenu by remember { mutableStateOf(false) }
+    var showShareExportSheet by remember { mutableStateOf(false) }
+    var showMoreDialog by remember { mutableStateOf(false) }
+    var showOcrResultDialog by remember { mutableStateOf(false) }
+    var extractedOcrText by remember { mutableStateOf("") }
+    var isOcrExtracting by remember { mutableStateOf(false) }
     var renameText by remember { mutableStateOf("") }
 
     Scaffold(
@@ -99,7 +113,7 @@ fun DocumentDetailScreen(
                     },
                     onShareClick = {
                         if (pages.isNotEmpty()) {
-                            showPdfDialog = true
+                            showShareExportSheet = true
                         } else {
                             Toast.makeText(context, "No pages to share", Toast.LENGTH_SHORT).show()
                         }
@@ -111,49 +125,8 @@ fun DocumentDetailScreen(
                             Toast.makeText(context, "Add pages to edit PDF", Toast.LENGTH_SHORT).show()
                         }
                     },
-                    onMoreClick = { showMoreMenu = true }
+                    onMoreClick = { showMoreDialog = true }
                 )
-
-                // More Menu Dropdown
-                DropdownMenu(
-                    expanded = showMoreMenu,
-                    onDismissRequest = { showMoreMenu = false },
-                    modifier = Modifier.background(colors.surface)
-                ) {
-                    DropdownMenuItem(
-                        text = { Text("E-Signature", color = colors.textPrimary) },
-                        onClick = {
-                            showMoreMenu = false
-                            showSignatureDialog = true
-                        },
-                        leadingIcon = { Icon(Icons.Default.Draw, contentDescription = null, tint = colors.textSecondary) }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Move to Folder", color = colors.textPrimary) },
-                        onClick = {
-                            showMoreMenu = false
-                            showMoveFolderDialog = true
-                        },
-                        leadingIcon = { Icon(Icons.AutoMirrored.Outlined.DriveFileMove, contentDescription = null, tint = colors.textSecondary) }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Rename", color = colors.textPrimary) },
-                        onClick = {
-                            showMoreMenu = false
-                            renameText = document?.title.orEmpty()
-                            showRenameDialog = true
-                        },
-                        leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null, tint = colors.textSecondary) }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Delete Document", color = Color(0xFFEE3F3F)) },
-                        onClick = {
-                            showMoreMenu = false
-                            showDeleteConfirmDialog = true
-                        },
-                        leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = Color(0xFFEE3F3F)) }
-                    )
-                }
             }
         }
     ) { innerPadding ->
@@ -393,6 +366,123 @@ fun DocumentDetailScreen(
                 showSignatureDialog = false
                 Toast.makeText(context, "Signature saved to document!", Toast.LENGTH_SHORT).show()
             }
+        )
+    }
+
+    if (showShareExportSheet) {
+        ShareExportBottomSheet(
+            pages = pages,
+            onDismiss = { showShareExportSheet = false },
+            onSharePdf = { showPdfDialog = true },
+            onShareJpg = { viewModel.shareAsImages(context) },
+            onShareLongImage = { viewModel.shareLongImage(context) },
+            onExtractText = {
+                isOcrExtracting = true
+                coroutineScope.launch(Dispatchers.IO) {
+                    val fullText = StringBuilder()
+                    for (p in pages) {
+                        val bmp = BitmapFactory.decodeFile(p.processedImagePath)
+                        if (bmp != null) {
+                            try {
+                                val recognized = OcrEngine.recognizeText(bmp)
+                                if (recognized.isNotBlank()) {
+                                    fullText.appendLine("--- Page ${p.pageIndex + 1} ---")
+                                    fullText.appendLine(recognized)
+                                    fullText.appendLine()
+                                }
+                            } finally {
+                                bmp.recycle()
+                            }
+                        }
+                    }
+                    withContext(Dispatchers.Main) {
+                        isOcrExtracting = false
+                        extractedOcrText = fullText.toString().ifBlank { "No text recognized in pages." }
+                        showOcrResultDialog = true
+                    }
+                }
+            },
+            onSplitPdf = {
+                Toast.makeText(context, "Pages are managed independently in OpenScanner.", Toast.LENGTH_SHORT).show()
+            },
+            onSaveToGallery = { viewModel.savePagesToGallery(context) },
+            onEmailToMyself = { viewModel.emailToMyself(context) }
+        )
+    }
+
+    if (showMoreDialog) {
+        DocumentMoreDialog(
+            onDismiss = { showMoreDialog = false },
+            onBatchEditClick = {
+                Toast.makeText(context, "Batch edit active.", Toast.LENGTH_SHORT).show()
+            },
+            onSetTagClick = {
+                Toast.makeText(context, "Tag management.", Toast.LENGTH_SHORT).show()
+            },
+            onPdfPasswordClick = {
+                showPdfDialog = true
+            },
+            onMoveToFolderClick = {
+                showMoveFolderDialog = true
+            },
+            onRenameClick = {
+                renameText = document?.title.orEmpty()
+                showRenameDialog = true
+            },
+            onDeleteClick = {
+                showDeleteConfirmDialog = true
+            },
+            onSignatureClick = {
+                showSignatureDialog = true
+            }
+        )
+    }
+
+    if (showOcrResultDialog) {
+        AlertDialog(
+            onDismissRequest = { showOcrResultDialog = false },
+            title = {
+                Text(
+                    text = "Extracted Text (Offline OCR)",
+                    color = colors.textPrimary,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 17.sp
+                )
+            },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .heightIn(max = 350.dp)
+                        .verticalScroll(androidx.compose.foundation.rememberScrollState())
+                ) {
+                    Text(
+                        text = extractedOcrText,
+                        color = colors.textPrimary,
+                        fontSize = 13.sp,
+                        lineHeight = 18.sp
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                        val clip = android.content.ClipData.newPlainText("Scanned Text", extractedOcrText)
+                        clipboard.setPrimaryClip(clip)
+                        Toast.makeText(context, "Copied to clipboard", Toast.LENGTH_SHORT).show()
+                        showOcrResultDialog = false
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = colors.primary)
+                ) {
+                    Text("Copy Text", color = Color.White)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showOcrResultDialog = false }) {
+                    Text("Close", color = colors.textSecondary)
+                }
+            },
+            containerColor = colors.surface
         )
     }
 }

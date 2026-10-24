@@ -276,4 +276,127 @@ class DocumentDetailViewModel(application: Application) : AndroidViewModel(appli
             }
         }
     }
+
+    fun shareLongImage(context: Context) {
+        val currentPages = _pages.value
+        if (currentPages.isEmpty()) {
+            Toast.makeText(context, "No pages to share", Toast.LENGTH_SHORT).show()
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            val filePaths = currentPages.map { it.processedImagePath }
+            val longBmp = org.openscanner.cv.CollageGenerator.generateLongImage(filePaths)
+            if (longBmp == null) {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, "Failed to stitch long image", Toast.LENGTH_SHORT).show()
+                }
+                return@launch
+            }
+            val exportDir = File(context.cacheDir, "exports").apply { if (!exists()) mkdirs() }
+            val longImgFile = File(exportDir, "long_image_${System.currentTimeMillis()}.jpg")
+            FileOutputStream(longImgFile).use { out ->
+                longBmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, out)
+            }
+            longBmp.recycle()
+
+            withContext(Dispatchers.Main) {
+                try {
+                    val uri = FileProvider.getUriForFile(
+                        context,
+                        "${context.packageName}.fileprovider",
+                        longImgFile
+                    )
+                    val intent = Intent(Intent.ACTION_SEND).apply {
+                        type = "image/jpeg"
+                        putExtra(Intent.EXTRA_STREAM, uri)
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    context.startActivity(Intent.createChooser(intent, "Share Long Image"))
+                } catch (e: Exception) {
+                    Toast.makeText(context, "Failed to share long image: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    fun savePagesToGallery(context: Context) {
+        val currentPages = _pages.value
+        if (currentPages.isEmpty()) {
+            Toast.makeText(context, "No pages to save", Toast.LENGTH_SHORT).show()
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            var savedCount = 0
+            for (p in currentPages) {
+                val srcFile = File(p.processedImagePath)
+                if (!srcFile.exists()) continue
+
+                val fileName = "OpenScanner_${System.currentTimeMillis()}_${p.pageIndex + 1}.jpg"
+                try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        val contentValues = ContentValues().apply {
+                            put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+                            put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
+                            put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/OpenScanner")
+                        }
+                        val uri = context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues)
+                        if (uri != null) {
+                            context.contentResolver.openOutputStream(uri)?.use { out ->
+                                FileInputStream(srcFile).use { input -> input.copyTo(out) }
+                            }
+                            savedCount++
+                        }
+                    } else {
+                        val picsDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES), "OpenScanner").apply { if (!exists()) mkdirs() }
+                        val destFile = File(picsDir, fileName)
+                        FileInputStream(srcFile).use { input ->
+                            FileOutputStream(destFile).use { out -> input.copyTo(out) }
+                        }
+                        savedCount++
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+            withContext(Dispatchers.Main) {
+                Toast.makeText(context, "Saved $savedCount page(s) to Gallery", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    fun emailToMyself(context: Context) {
+        val currentDoc = _document.value ?: return
+        val currentPages = _pages.value
+        if (currentPages.isEmpty()) {
+            Toast.makeText(context, "No pages to email", Toast.LENGTH_SHORT).show()
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            val pdfDir = File(context.cacheDir, "exports").apply { if (!exists()) mkdirs() }
+            val cleanTitle = currentDoc.title.replace(Regex("[^a-zA-Z0-9_\\-]"), "_").ifBlank { "Document" }
+            val pdfFile = File(pdfDir, "${cleanTitle}.pdf")
+            val options = PdfExportOptions()
+            PdfGenerator.generatePdf(context, currentPages, options, pdfFile)
+
+            withContext(Dispatchers.Main) {
+                try {
+                    val uri = FileProvider.getUriForFile(
+                        context,
+                        "${context.packageName}.fileprovider",
+                        pdfFile
+                    )
+                    val emailIntent = Intent(Intent.ACTION_SEND).apply {
+                        type = "application/pdf"
+                        putExtra(Intent.EXTRA_SUBJECT, currentDoc.title)
+                        putExtra(Intent.EXTRA_TEXT, "Scanned document sent via OpenScanner.")
+                        putExtra(Intent.EXTRA_STREAM, uri)
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    context.startActivity(Intent.createChooser(emailIntent, "Email Document"))
+                } catch (e: Exception) {
+                    Toast.makeText(context, "Could not open email client: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
 }

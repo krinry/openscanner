@@ -6,6 +6,7 @@ import android.graphics.BitmapFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
+import org.openscanner.cv.BookSpineDetector
 import org.openscanner.cv.CollageGenerator
 import org.openscanner.cv.CollageLayout
 import org.openscanner.data.local.DocumentDao
@@ -37,12 +38,85 @@ class ScannerRepository(
 
     suspend fun getDocumentById(id: Long): Document? = documentDao.getDocumentById(id)
 
-    // --- Folder Queries & Mutations ---
+    // --- Hierarchical Folder Queries & Mutations ---
     fun getAllFolders(): Flow<List<Folder>> = folderDao.getAllFolders()
 
-    suspend fun createFolder(name: String, color: String = "#EEAA3B"): Long = withContext(Dispatchers.IO) {
-        val folder = Folder(name = name.trim(), color = color)
+    fun getRootFolders(): Flow<List<Folder>> = folderDao.getRootFolders()
+
+    fun getSubfolders(parentFolderId: Long): Flow<List<Folder>> = folderDao.getSubfolders(parentFolderId)
+
+    suspend fun createFolder(
+        name: String,
+        parentFolderId: Long = -1L,
+        color: String = "#EEAA3B"
+    ): Long = withContext(Dispatchers.IO) {
+        val parent = if (parentFolderId > 0) folderDao.getFolderById(parentFolderId) else null
+        val parentPath = parent?.let { "${it.path}${it.id}/" } ?: "/"
+        val folder = Folder(
+            name = name.trim(),
+            color = color,
+            parentFolderId = parentFolderId,
+            path = parentPath
+        )
         folderDao.insertFolder(folder)
+    }
+
+    suspend fun createFolder(
+        name: String,
+        color: String
+    ): Long = createFolder(name = name, parentFolderId = -1L, color = color)
+
+    suspend fun getBreadcrumbs(folderId: Long): List<Folder> = withContext(Dispatchers.IO) {
+        if (folderId <= 0) return@withContext emptyList()
+        val trail = mutableListOf<Folder>()
+        var currentId: Long? = folderId
+        val visited = mutableSetOf<Long>()
+        while (currentId != null && currentId > 0 && visited.add(currentId)) {
+            val folder = folderDao.getFolderById(currentId) ?: break
+            trail.add(0, folder)
+            currentId = folder.parentFolderId.takeIf { it > 0 }
+        }
+        trail
+    }
+
+    suspend fun moveFolder(folderId: Long, targetParentFolderId: Long) = withContext(Dispatchers.IO) {
+        val folder = folderDao.getFolderById(folderId) ?: return@withContext
+        if (folder.id == targetParentFolderId) return@withContext
+
+        // Prevent moving a folder into its own descendant
+        if (targetParentFolderId > 0) {
+            val targetBreadcrumbs = getBreadcrumbs(targetParentFolderId)
+            if (targetBreadcrumbs.any { it.id == folderId }) {
+                throw IllegalArgumentException("Cannot move folder into one of its descendants")
+            }
+        }
+
+        val oldDescendantPrefix = "${folder.path}${folder.id}/"
+        val targetParent = if (targetParentFolderId > 0) folderDao.getFolderById(targetParentFolderId) else null
+        val newParentPath = targetParent?.let { "${it.path}${it.id}/" } ?: "/"
+        val newDescendantPrefix = "${newParentPath}${folder.id}/"
+
+        // Update the folder itself
+        folderDao.updateFolder(folder.copy(parentFolderId = targetParentFolderId, path = newParentPath))
+
+        // Update all descendant paths
+        folderDao.updateFolderPathPrefix(oldPrefix = oldDescendantPrefix, newPrefix = newDescendantPrefix)
+    }
+
+    suspend fun deleteFolderCascade(folder: Folder, deleteContainedDocuments: Boolean = false) = withContext(Dispatchers.IO) {
+        val descendantPrefix = "${folder.path}${folder.id}/"
+        val allFolders = folderDao.getAllFoldersList()
+        val affectedFolders = allFolders.filter { it.id == folder.id || it.path.startsWith(descendantPrefix) }
+
+        for (f in affectedFolders) {
+            if (deleteContainedDocuments) {
+                val docs = documentDao.getDocumentsListInFolder(f.id)
+                docs.forEach { deleteDocument(it) }
+            } else {
+                documentDao.unlinkDocumentsFromFolder(f.id)
+            }
+            folderDao.deleteFolderById(f.id)
+        }
     }
 
     suspend fun renameFolder(folderId: Long, newName: String) = withContext(Dispatchers.IO) {
@@ -61,6 +135,84 @@ class ScannerRepository(
 
     suspend fun moveDocumentToFolder(docId: Long, folderId: Long) = withContext(Dispatchers.IO) {
         documentDao.updateDocumentFolder(docId, folderId)
+    }
+
+    suspend fun copyDocumentToFolder(docId: Long, targetFolderId: Long): Long = withContext(Dispatchers.IO) {
+        val origDoc = documentDao.getDocumentById(docId)
+            ?: throw IllegalArgumentException("Document with id $docId not found")
+        val origPages = pageDao.getPagesListForDocument(docId)
+
+        val scansDir = File(context.filesDir, "scans").apply { if (!exists()) mkdirs() }
+        val thumbsDir = File(context.filesDir, "thumbs").apply { if (!exists()) mkdirs() }
+
+        val now = System.currentTimeMillis()
+        val newDoc = Document(
+            title = "${origDoc.title} (Copy)",
+            createdTime = now,
+            modifiedTime = now,
+            pageCount = origPages.size,
+            tags = origDoc.tags,
+            folderId = targetFolderId
+        )
+        val newDocId = documentDao.insertDocument(newDoc)
+
+        val copiedFiles = mutableListOf<File>()
+        try {
+            val newPages = mutableListOf<Page>()
+            for ((idx, origPage) in origPages.withIndex()) {
+                val timestamp = now + idx
+                val newProcessed = File(scansDir, "page_${newDocId}_${timestamp}.jpg")
+                val newOriginal = File(scansDir, "orig_${newDocId}_${timestamp}.jpg")
+                val newThumb = File(thumbsDir, "thumb_${newDocId}_${timestamp}.jpg")
+
+                val origProcessedFile = File(origPage.processedImagePath)
+                if (origProcessedFile.exists()) {
+                    origProcessedFile.copyTo(newProcessed, overwrite = true)
+                    copiedFiles.add(newProcessed)
+                }
+
+                val origOriginalFile = File(origPage.originalImagePath)
+                if (origOriginalFile.exists()) {
+                    origOriginalFile.copyTo(newOriginal, overwrite = true)
+                    copiedFiles.add(newOriginal)
+                } else if (newProcessed.exists()) {
+                    newProcessed.copyTo(newOriginal, overwrite = true)
+                    copiedFiles.add(newOriginal)
+                }
+
+                val origThumbFile = File(origPage.thumbnailPath)
+                if (origThumbFile.exists()) {
+                    origThumbFile.copyTo(newThumb, overwrite = true)
+                    copiedFiles.add(newThumb)
+                }
+
+                val newPage = Page(
+                    documentId = newDocId,
+                    pageIndex = origPage.pageIndex,
+                    processedImagePath = if (newProcessed.exists()) newProcessed.absolutePath else origPage.processedImagePath,
+                    originalImagePath = if (newOriginal.exists()) newOriginal.absolutePath else origPage.originalImagePath,
+                    thumbnailPath = if (newThumb.exists()) newThumb.absolutePath else origPage.thumbnailPath,
+                    cropBorderJson = origPage.cropBorderJson,
+                    enhanceMode = origPage.enhanceMode,
+                    rotationDegrees = origPage.rotationDegrees,
+                    brightness = origPage.brightness,
+                    contrast = origPage.contrast,
+                    ocrText = origPage.ocrText,
+                    watermarkText = origPage.watermarkText,
+                    createdTime = now
+                )
+                newPages.add(newPage)
+            }
+
+            if (newPages.isNotEmpty()) {
+                pageDao.insertPages(newPages)
+            }
+            newDocId
+        } catch (e: Exception) {
+            copiedFiles.forEach { it.delete() }
+            documentDao.deleteDocument(newDoc.copy(id = newDocId))
+            throw e
+        }
     }
 
     suspend fun batchMoveToFolder(docIds: List<Long>, folderId: Long) = withContext(Dispatchers.IO) {
@@ -205,11 +357,22 @@ class ScannerRepository(
         pageIds: List<Long>,
         layout: CollageLayout
     ): Page = withContext(Dispatchers.IO) {
+        val targetSlotRects = CollageGenerator.calculateSlotRects(layout)
         val bitmaps = mutableListOf<Bitmap>()
-        for (pId in pageIds) {
+        val selectedIds = pageIds.take(layout.maxPages)
+        for ((index, pId) in selectedIds.withIndex()) {
             val page = pageDao.getPageById(pId)
             if (page != null && File(page.processedImagePath).exists()) {
-                val bmp = BitmapFactory.decodeFile(page.processedImagePath)
+                val slot = targetSlotRects.getOrNull(index)
+                val bmp = if (slot != null) {
+                    CollageGenerator.decodeSampledBitmap(
+                        filePath = page.processedImagePath,
+                        reqWidth = slot.right - slot.left,
+                        reqHeight = slot.bottom - slot.top
+                    )
+                } else {
+                    BitmapFactory.decodeFile(page.processedImagePath)
+                }
                 if (bmp != null) {
                     bitmaps.add(bmp)
                 }
@@ -220,7 +383,17 @@ class ScannerRepository(
             throw IllegalStateException("No valid page images found for collage")
         }
 
-        val collageBitmap = CollageGenerator.createCollage(bitmaps, layout)
+        val collageBitmap = try {
+            CollageGenerator.createCollage(bitmaps, layout)
+        } finally {
+            // Recycle intermediate downsampled page bitmaps to prevent heap bloat
+            bitmaps.forEach { bmp ->
+                if (!bmp.isRecycled) {
+                    bmp.recycle()
+                }
+            }
+        }
+
         savePage(
             documentId = documentId,
             processedBitmap = collageBitmap,
@@ -243,41 +416,139 @@ class ScannerRepository(
     suspend fun stitchIdCardPages(
         frontBitmap: Bitmap,
         backBitmap: Bitmap,
-        documentId: Long
+        targetDocId: Long? = null
     ): Page = withContext(Dispatchers.IO) {
+        val docId = if (targetDocId != null && targetDocId > 0) {
+            targetDocId
+        } else {
+            createNewDocument("ID Card Scan")
+        }
+
         val a4Width = 2480
         val a4Height = 3508
         val a4Bitmap = Bitmap.createBitmap(a4Width, a4Height, Bitmap.Config.ARGB_8888)
         val canvas = android.graphics.Canvas(a4Bitmap)
         canvas.drawColor(android.graphics.Color.WHITE)
 
-        val cardW = (a4Width * 0.70f).toInt()
-        val cardH = (cardW / 1.586f).toInt()
-        val cardX = (a4Width - cardW) / 2
+        val cardW = (a4Width * 0.70f).toInt() // 1736 px
+        val cardH = Math.round(cardW / 1.586f).toInt() // 1095 px
+        val cardX = (a4Width - cardW) / 2 // 372 px
 
-        val frontY = (a4Height * 0.20f).toInt()
-        val frontRect = android.graphics.Rect(cardX, frontY, cardX + cardW, frontY + cardH)
-        canvas.drawBitmap(frontBitmap, null, frontRect, null)
+        val frontY = (a4Height * 0.20f).toInt() // 701 px
+        val backY = (a4Height * 0.56f).toInt() // 1964 px
 
-        val strokePaint = android.graphics.Paint().apply {
-            color = android.graphics.Color.LTGRAY
-            style = android.graphics.Paint.Style.STROKE
-            strokeWidth = 6f
+        val cardCornerRadius = 16f
+
+        val bitmapPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            isFilterBitmap = true
+            isDither = true
         }
-        canvas.drawRect(frontRect, strokePaint)
 
-        val backY = (a4Height * 0.56f).toInt()
-        val backRect = android.graphics.Rect(cardX, backY, cardX + cardW, backY + cardH)
-        canvas.drawBitmap(backBitmap, null, backRect, null)
-        canvas.drawRect(backRect, strokePaint)
+        val borderPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.parseColor("#E0E0E0")
+            style = android.graphics.Paint.Style.STROKE
+            strokeWidth = 4f
+        }
+
+        // Draw Front Card with rounded clipping and #E0E0E0 border
+        val frontRectF = android.graphics.RectF(
+            cardX.toFloat(),
+            frontY.toFloat(),
+            (cardX + cardW).toFloat(),
+            (frontY + cardH).toFloat()
+        )
+        val frontPath = android.graphics.Path().apply {
+            addRoundRect(frontRectF, cardCornerRadius, cardCornerRadius, android.graphics.Path.Direction.CW)
+        }
+        canvas.save()
+        canvas.clipPath(frontPath)
+        canvas.drawBitmap(frontBitmap, null, frontRectF, bitmapPaint)
+        canvas.restore()
+        canvas.drawRoundRect(frontRectF, cardCornerRadius, cardCornerRadius, borderPaint)
+
+        // Draw Back Card with rounded clipping and #E0E0E0 border
+        val backRectF = android.graphics.RectF(
+            cardX.toFloat(),
+            backY.toFloat(),
+            (cardX + cardW).toFloat(),
+            (backY + cardH).toFloat()
+        )
+        val backPath = android.graphics.Path().apply {
+            addRoundRect(backRectF, cardCornerRadius, cardCornerRadius, android.graphics.Path.Direction.CW)
+        }
+        canvas.save()
+        canvas.clipPath(backPath)
+        canvas.drawBitmap(backBitmap, null, backRectF, bitmapPaint)
+        canvas.restore()
+        canvas.drawRoundRect(backRectF, cardCornerRadius, cardCornerRadius, borderPaint)
 
         savePage(
-            documentId = documentId,
+            documentId = docId,
             processedBitmap = a4Bitmap,
             originalBitmap = a4Bitmap,
             cropBorderJson = "",
             enhanceModeId = 1
         )
+    }
+
+    /**
+     * Splits a book spread bitmap into Left and Right pages, applies 1D cylindrical curvature unwarping
+     * and crease shadow compensation, and saves both as two consecutive document pages.
+     *
+     * @return Pair of (leftPageId, rightPageId)
+     */
+    suspend fun splitAndSaveBookPages(
+        spreadBitmap: Bitmap,
+        spineX: Int,
+        targetDocId: Long? = null
+    ): Pair<Long, Long> = withContext(Dispatchers.IO) {
+        val docId = if (targetDocId != null && targetDocId > 0) {
+            targetDocId
+        } else {
+            val defaultTitle = "Book Scan " + SimpleDateFormat("dd-MM-yyyy HH.mm", Locale.getDefault()).format(Date())
+            createNewDocument(title = defaultTitle)
+        }
+
+        val width = spreadBitmap.width
+        val validSpineX = spineX.coerceIn(
+            (width * 0.15f).toInt().coerceAtLeast(1),
+            (width * 0.85f).toInt().coerceAtMost(width - 1)
+        )
+
+        val (unwarpedLeft, unwarpedRight) = BookSpineDetector.splitAndUnwarpSpread(
+            spreadBitmap = spreadBitmap,
+            spineX = validSpineX
+        )
+
+        val leftPage = try {
+            savePage(
+                documentId = docId,
+                processedBitmap = unwarpedLeft,
+                originalBitmap = unwarpedLeft,
+                cropBorderJson = "",
+                enhanceModeId = 1
+            )
+        } finally {
+            if (!unwarpedLeft.isRecycled) {
+                unwarpedLeft.recycle()
+            }
+        }
+
+        val rightPage = try {
+            savePage(
+                documentId = docId,
+                processedBitmap = unwarpedRight,
+                originalBitmap = unwarpedRight,
+                cropBorderJson = "",
+                enhanceModeId = 1
+            )
+        } finally {
+            if (!unwarpedRight.isRecycled) {
+                unwarpedRight.recycle()
+            }
+        }
+
+        Pair(leftPage.id, rightPage.id)
     }
 
     suspend fun deleteDocument(document: Document) = withContext(Dispatchers.IO) {

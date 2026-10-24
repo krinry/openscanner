@@ -86,3 +86,79 @@ Drawn programmatically using Compose `Path`:
 ### 4.6 Theme Switcher Control (☀️ / 🌙)
 * Quick-toggle icon button in `HomeTopBar` providing instantaneous transition between AMOLED Dark and Paper Light modes.
 * Full-width theme control card in `HomeToolsTab` with live status indicator and switch control.
+
+---
+
+## 5. Reverse-Engineered Reference Screen Specifications (100% Clean-Room)
+
+### 5.1 Collage Studio Screen (`CollageStudioScreen.kt`)
+* **Top App Bar**: Back navigation icon, "Collage" bold title, and top-right green pill action button (`ScannerGreen`, "Done").
+* **Preview Canvas**: Dynamic real-time preview of stacked/arranged document pages rendered onto a dark canvas with subtle drop shadows.
+* **Template Selector Carousel**:
+  - Horizontal scrollable template cards with graphical slot outlines:
+    - `Question Book`: Multi-column exam/question paper layout.
+    - `Driver License` (ID Card 2-in-1): Top-and-bottom stacked cards for standard identification cards.
+    - `Passport`: Side-by-side photo + biographical text blocks.
+    - `2x1`: Two pages stacked vertically.
+    - `1x2`: Two pages placed side-by-side horizontally.
+    - `4-Grid`: $2 \times 2$ quadrant grid.
+    - `6-Grid`: $3 \times 2$ compact overview.
+* **Bottom Tool Tabs**:
+  - `Page` (+ icon): Add or swap pages in the collage.
+  - `Add a watermark` (Wave icon): Opens security text watermark overlay dialog.
+  - `Template` (Grid icon - active emerald): Toggles the template carousel.
+  - `Size` (Paper icon): Dropdown/dialog to pick paper size (A4, Letter, Legal, Auto).
+
+### 5.2 Multi-Page Share & Export Bottom Sheet (`ShareExportBottomSheet.kt`)
+* **Header**: Title formatted as `"[N] picture(s) selected"` with close `(X)` icon on the top-right.
+* **Horizontal Thumbnail Carousel**:
+  - Displays selected page thumbnails with subtle rounded corners and page badges.
+  - Subtle footer text: `"Processed locally with OpenScanner"`.
+* **Export Action Menu Items**:
+  - `Share PDF`: Shows estimated PDF file size (e.g., `(7.10MB)`) with emerald `"Often use"` pill badge.
+  - `Share JPG`: Shows estimated total image archive file size (e.g., `(7.09MB)`).
+  - `Share as long image`: Merges all selected pages vertically into a seamless continuous image.
+  - `Extract Text`: Triggers offline on-device OCR and displays estimated text payload size (e.g., `(2.64KB)`).
+  - `Split PDF into Individual Pages`: Splits multi-page PDF into single-page documents.
+  - `Save to Gallery`: Exports high-resolution JPEGs directly to the public device Pictures/Gallery album.
+  - `Email to Myself`: Quick action opening email client with pre-attached PDF/images.
+
+### 5.3 Page Detail Quick Edit Toolbar (`PageViewerScreen.kt`)
+* **Top Header**: Document title ("New Doc..."), Back arrow, and prominent green `"Save"` pill button on the right.
+* **Page Counter Badge**: High-contrast pill badge on the top-left showing `"1/N"` (e.g., `"1/9"`).
+* **Center High-Res Preview**: Vertical gesture-zoomable bitmap rendering.
+* **Bottom Quick Edit Action Bar**:
+  - `Anti-theft` (Shield/Watermark icon): Opens custom security watermark overlay dialog (text, opacity, angle).
+  - `Signature` (Pen icon): Opens signature canvas to sign and stamp vector signatures directly on the page.
+  - `PDF Password` (Lock icon): Sets password protection for PDF export.
+  - `Compression` (Compress icon): Configures image/PDF compression levels (Low, Medium, High).
+
+### 5.4 Document "More" Settings & PDF Formatting Sheet (`DocumentMoreDialog.kt`)
+* **Top Header**: "More" screen with Back arrow.
+* **Menu Options**:
+  - `Batch edit` (> chevron): Multi-page batch cropping, rotation, and filter application.
+  - `Set Tag` (> chevron): Document tagging system.
+  - `View by`: Sort order switch with `"First on top"` and `"Last on top"` toggle buttons.
+  - `PDF Password`: Quick access to set or remove PDF password encryption.
+  - `Page Number`: Segmented visual selector for page numbering:
+    - `No page number`
+    - `the lower-left`
+    - `the bottom center`
+    - `the lower-right`
+  - `PDF Direction`: Segmented selector:
+    - `Auto-adjust`
+    - `Landscape`
+    - `Portrait`
+  - `PDF Page Size`: Grid of standard paper size buttons with dimensions in cm/inches:
+    - `Auto Fit`
+    - `A3` ($29.7\text{cm} \times 42.0\text{cm}$)
+    - `A4` ($21.0\text{cm} \times 29.7\text{cm}$, default selected)
+    - `A5` ($14.8\text{cm} \times 21.0\text{cm}$)
+    - `B4` ($25.0\text{cm} \times 35.3\text{cm}$)
+    - `B5` ($17.6\text{cm} \times 25.0\text{cm}$)
+    - `Letter` ($21.6\text{cm} \times 27.9\text{cm}$)
+    - `Tabloid` ($27.9\text{cm} \times 43.2\text{cm}$)
+    - `Legal` ($21.6\text{cm} \times 35.6\text{cm}$)
+    - `Executive` ($18.4\text{cm} \times 26.7\text{cm}$)
+    - `Postcard` ($10.0\text{cm} \times 14.7\text{cm}$)
+
