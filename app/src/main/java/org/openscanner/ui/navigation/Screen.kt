@@ -3,7 +3,7 @@ package org.openscanner.ui.navigation
 sealed class Screen(val route: String) {
     object Home : Screen("home")
     object Camera : Screen("camera?docId={docId}&mode={mode}") {
-        fun createRoute(docId: Long = -1L, mode: String = "Single"): String = "camera?docId=$docId&mode=$mode"
+        fun createRoute(docId: Long = -1L, mode: String = "Document"): String = "camera?docId=$docId&mode=$mode"
     }
     object Crop : Screen("crop?imagePath={imagePath}&docId={docId}") {
         fun createRoute(imagePath: String, docId: Long): String = "crop?imagePath=$imagePath&docId=$docId"

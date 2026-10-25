@@ -78,6 +78,10 @@ class BatchWarpProcessor(
             }
         }
 
+        withContext(Dispatchers.Main) {
+            onProgress(total, total)
+        }
+
         docId
     }
 

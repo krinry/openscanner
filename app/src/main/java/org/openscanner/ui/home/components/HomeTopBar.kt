@@ -48,6 +48,7 @@ fun HomeTopBar(
     onToggleGridView: () -> Unit,
     onEnterSelectMode: () -> Unit,
     onCreateFolderClick: () -> Unit,
+    onNavigateUp: () -> Unit = { onSelectFolder(null) },
     onProfileClick: () -> Unit = {},
     showSubHeader: Boolean = true
 ) {
@@ -202,7 +203,7 @@ fun HomeTopBar(
                         ) {
                             if (selectedFolder != null) {
                                 IconButton(
-                                    onClick = { onSelectFolder(null) },
+                                    onClick = onNavigateUp,
                                     modifier = Modifier.size(24.dp)
                                 ) {
                                     Icon(

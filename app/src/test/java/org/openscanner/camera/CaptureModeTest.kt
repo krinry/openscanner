@@ -13,9 +13,8 @@ class CaptureModeTest {
     @Test
     fun testAllCaptureModesExist() {
         val modes = CaptureMode.values()
-        assertEquals(5, modes.size)
-        assertTrue(modes.contains(CaptureMode.SINGLE))
-        assertTrue(modes.contains(CaptureMode.BATCH))
+        assertEquals(4, modes.size)
+        assertTrue(modes.contains(CaptureMode.DOCUMENT))
         assertTrue(modes.contains(CaptureMode.ID_CARD))
         assertTrue(modes.contains(CaptureMode.QR_CODE))
         assertTrue(modes.contains(CaptureMode.BOOK))
@@ -23,11 +22,8 @@ class CaptureModeTest {
 
     @Test
     fun testCaptureModeTitlesAndDescriptions() {
-        assertEquals("Single", CaptureMode.SINGLE.title)
-        assertEquals("Single document page with auto-crop", CaptureMode.SINGLE.description)
-
-        assertEquals("Batch", CaptureMode.BATCH.title)
-        assertEquals("Continuous scanning for multi-page documents", CaptureMode.BATCH.description)
+        assertEquals("Document", CaptureMode.DOCUMENT.title)
+        assertEquals("Continuous scanning for single or multi-page documents", CaptureMode.DOCUMENT.description)
 
         assertEquals("ID Card", CaptureMode.ID_CARD.title)
         assertEquals("Front & Back card sides combined onto one page", CaptureMode.ID_CARD.description)
@@ -41,8 +37,7 @@ class CaptureModeTest {
 
     @Test
     fun testCaptureModeValueOf() {
-        assertEquals(CaptureMode.SINGLE, CaptureMode.valueOf("SINGLE"))
-        assertEquals(CaptureMode.BATCH, CaptureMode.valueOf("BATCH"))
+        assertEquals(CaptureMode.DOCUMENT, CaptureMode.valueOf("DOCUMENT"))
         assertEquals(CaptureMode.ID_CARD, CaptureMode.valueOf("ID_CARD"))
         assertEquals(CaptureMode.QR_CODE, CaptureMode.valueOf("QR_CODE"))
         assertEquals(CaptureMode.BOOK, CaptureMode.valueOf("BOOK"))

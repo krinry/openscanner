@@ -351,8 +351,8 @@ fun DocumentDetailScreen(
         CollageStudioDialog(
             pages = pages,
             onDismiss = { showCollageDialog = false },
-            onGenerateCollage = { layout, pageIds, watermarkConfig, transforms ->
-                viewModel.createCollage(layout, pageIds, watermarkConfig, transforms) {
+            onGenerateCollage = { layout, pageIds, watermarkConfig, transforms, drawBorders, customPaths ->
+                viewModel.createCollage(layout, pageIds, watermarkConfig, transforms, drawBorders, customPaths) {
                     showCollageDialog = false
                     Toast.makeText(context, "Collage page generated!", Toast.LENGTH_SHORT).show()
                 }

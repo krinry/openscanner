@@ -27,7 +27,7 @@ class CameraViewModelTest {
 
     @Test
     fun testInitialCameraState() {
-        assertEquals(CaptureMode.SINGLE, viewModel.currentMode.value)
+        assertEquals(CaptureMode.DOCUMENT, viewModel.currentMode.value)
         assertEquals(0, viewModel.batchCount.value)
         assertEquals(ImageCapture.FLASH_MODE_OFF, viewModel.flashMode.value)
         assertNull(viewModel.detectedQuad.value)
@@ -36,9 +36,6 @@ class CameraViewModelTest {
 
     @Test
     fun testSetModeTransitions() {
-        viewModel.setMode(CaptureMode.BATCH)
-        assertEquals(CaptureMode.BATCH, viewModel.currentMode.value)
-
         viewModel.setMode(CaptureMode.ID_CARD)
         assertEquals(CaptureMode.ID_CARD, viewModel.currentMode.value)
 
@@ -48,8 +45,8 @@ class CameraViewModelTest {
         viewModel.setMode(CaptureMode.QR_CODE)
         assertEquals(CaptureMode.QR_CODE, viewModel.currentMode.value)
 
-        viewModel.setMode(CaptureMode.SINGLE)
-        assertEquals(CaptureMode.SINGLE, viewModel.currentMode.value)
+        viewModel.setMode(CaptureMode.DOCUMENT)
+        assertEquals(CaptureMode.DOCUMENT, viewModel.currentMode.value)
     }
 
     @Test

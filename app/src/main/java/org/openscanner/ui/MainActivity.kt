@@ -73,11 +73,11 @@ class MainActivity : ComponentActivity() {
                             route = Screen.Camera.route,
                             arguments = listOf(
                                 navArgument("docId") { type = NavType.LongType; defaultValue = -1L },
-                                navArgument("mode") { type = NavType.StringType; defaultValue = "Single" }
+                                navArgument("mode") { type = NavType.StringType; defaultValue = "Document" }
                             )
                         ) { backStackEntry ->
                             val docId = backStackEntry.arguments?.getLong("docId") ?: -1L
-                            val mode = backStackEntry.arguments?.getString("mode") ?: "Single"
+                            val mode = backStackEntry.arguments?.getString("mode") ?: "Document"
                             CameraScreen(
                                 docId = docId,
                                 initialMode = mode,
@@ -143,7 +143,7 @@ class MainActivity : ComponentActivity() {
                                 docId = docId,
                                 onNavigateBack = { navController.popBackStack() },
                                 onNavigateToCamera = { dId ->
-                                    navController.navigate(Screen.Camera.createRoute(dId, "Batch"))
+                                    navController.navigate(Screen.Camera.createRoute(dId, "Document"))
                                 },
                                 onNavigateToViewer = { pageId ->
                                     navController.navigate(Screen.PageViewer.createRoute(pageId))

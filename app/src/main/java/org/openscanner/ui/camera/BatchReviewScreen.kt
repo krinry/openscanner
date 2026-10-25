@@ -861,7 +861,7 @@ fun BatchReviewScreen(
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Text(
-                        text = "Processing Batch...",
+                        text = "Processing Document...",
                         color = Color.White,
                         fontWeight = FontWeight.Bold,
                         fontSize = 16.sp

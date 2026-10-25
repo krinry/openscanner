@@ -318,4 +318,33 @@ class CollageGeneratorTest {
         assertEquals(1, minOf(CollageLayout.TWO_VERTICAL.maxPages, 1))
         assertEquals(0, minOf(CollageLayout.FOUR_GRID.maxPages, 0))
     }
+
+    @Test
+    fun testSlotTransformDefaultsAndCustomValues() {
+        val defaultTransform = SlotTransform()
+        assertEquals(1.0f, defaultTransform.scale, 0.001f)
+        assertEquals(0.0f, defaultTransform.panX, 0.001f)
+        assertEquals(0.0f, defaultTransform.panY, 0.001f)
+        assertEquals(0.0f, defaultTransform.rotation, 0.001f)
+
+        val customTransform = SlotTransform(
+            scale = 1.5f,
+            panX = 0.25f,
+            panY = -0.15f,
+            rotation = 90.0f
+        )
+        assertEquals(1.5f, customTransform.scale, 0.001f)
+        assertEquals(0.25f, customTransform.panX, 0.001f)
+        assertEquals(-0.15f, customTransform.panY, 0.001f)
+        assertEquals(90.0f, customTransform.rotation, 0.001f)
+    }
+
+    @Test
+    fun testFourAndSixGridLayoutsSlotCounts() {
+        val fourGridSlots = CollageGenerator.calculateSlotRects(CollageLayout.FOUR_GRID)
+        assertEquals(4, fourGridSlots.size)
+
+        val sixGridSlots = CollageGenerator.calculateSlotRects(CollageLayout.SIX_GRID)
+        assertEquals(6, sixGridSlots.size)
+    }
 }

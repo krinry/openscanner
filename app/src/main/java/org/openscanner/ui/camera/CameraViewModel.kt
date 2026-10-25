@@ -32,7 +32,7 @@ data class BatchCaptureItem(
 
 class CameraViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val _currentMode = MutableStateFlow(CaptureMode.SINGLE)
+    private val _currentMode = MutableStateFlow(CaptureMode.DOCUMENT)
     val currentMode: StateFlow<CaptureMode> = _currentMode
 
     private val _detectedQuad = MutableStateFlow<DocumentQuadrilateral?>(null)
@@ -278,7 +278,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
                     image.close()
 
-                    if (_currentMode.value == CaptureMode.BATCH) {
+                    if (_currentMode.value == CaptureMode.DOCUMENT) {
                         _batchCount.value += 1
                     }
 
@@ -290,5 +290,43 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 }
             }
         )
+    }
+
+    fun addDocumentItemFromFile(
+        filePath: String,
+        onSuccess: (BatchCaptureItem) -> Unit = {}
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val boundsOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeFile(filePath, boundsOpts)
+                var sampleSize = 1
+                while (boundsOpts.outWidth / (sampleSize * 2) >= 320 && boundsOpts.outHeight / (sampleSize * 2) >= 320) {
+                    sampleSize *= 2
+                }
+                val thumbOpts = BitmapFactory.Options().apply {
+                    inSampleSize = sampleSize
+                    inPreferredConfig = Bitmap.Config.ARGB_8888
+                }
+                val thumbBmp = BitmapFactory.decodeFile(filePath, thumbOpts)
+
+                val newItem = BatchCaptureItem(
+                    id = System.nanoTime(),
+                    rawFilePath = filePath,
+                    thumbnailBitmap = thumbBmp ?: Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888),
+                    rotationDegrees = 0,
+                    cropQuad = null
+                )
+
+                withContext(Dispatchers.Main) {
+                    val updated = _batchQueue.value + newItem
+                    _batchQueue.value = updated
+                    _batchCount.value = updated.size
+                    onSuccess(newItem)
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
     }
 }

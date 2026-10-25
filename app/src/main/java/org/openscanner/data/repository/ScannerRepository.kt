@@ -45,6 +45,8 @@ class ScannerRepository(
 
     fun getSubfolders(parentFolderId: Long): Flow<List<Folder>> = folderDao.getSubfolders(parentFolderId)
 
+    suspend fun getFolderById(id: Long): Folder? = folderDao.getFolderById(id)
+
     suspend fun createFolder(
         name: String,
         parentFolderId: Long = -1L,
@@ -457,23 +459,36 @@ class ScannerRepository(
         pageIds: List<Long>,
         layout: CollageLayout,
         watermarkConfig: org.openscanner.cv.CollageWatermarkConfig? = null,
-        slotTransforms: Map<Int, org.openscanner.cv.SlotTransform>? = null
+        slotTransforms: Map<Int, org.openscanner.cv.SlotTransform>? = null,
+        drawBorders: Boolean = false,
+        slotCustomPaths: Map<Int, String>? = null
     ): Page = withContext(Dispatchers.IO) {
         val targetSlotRects = CollageGenerator.calculateSlotRects(layout)
         val bitmaps = mutableListOf<Bitmap>()
-        val selectedIds = pageIds.take(layout.maxPages)
-        for ((index, pId) in selectedIds.withIndex()) {
-            val page = pageDao.getPageById(pId)
-            if (page != null && File(page.processedImagePath).exists()) {
+        val slotCount = layout.maxPages
+
+        for (index in 0 until slotCount) {
+            val customPath = slotCustomPaths?.get(index)
+            val path = if (!customPath.isNullOrBlank() && File(customPath).exists()) {
+                customPath
+            } else {
+                val pId = pageIds.getOrNull(index) ?: pageIds.getOrNull(index % pageIds.size.coerceAtLeast(1))
+                if (pId != null) {
+                    val page = pageDao.getPageById(pId)
+                    page?.processedImagePath.orEmpty()
+                } else ""
+            }
+
+            if (path.isNotBlank() && File(path).exists()) {
                 val slot = targetSlotRects.getOrNull(index)
                 val bmp = if (slot != null) {
                     CollageGenerator.decodeSampledBitmap(
-                        filePath = page.processedImagePath,
+                        filePath = path,
                         reqWidth = slot.right - slot.left,
                         reqHeight = slot.bottom - slot.top
                     )
                 } else {
-                    BitmapFactory.decodeFile(page.processedImagePath)
+                    BitmapFactory.decodeFile(path)
                 }
                 if (bmp != null) {
                     bitmaps.add(bmp)
@@ -489,6 +504,7 @@ class ScannerRepository(
             CollageGenerator.createCollage(
                 bitmaps = bitmaps,
                 layout = layout,
+                drawBorders = drawBorders,
                 watermarkConfig = watermarkConfig,
                 slotTransforms = slotTransforms
             )

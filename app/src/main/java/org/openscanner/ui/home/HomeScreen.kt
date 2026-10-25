@@ -1,6 +1,7 @@
 package org.openscanner.ui.home
 
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -15,7 +16,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.*
@@ -25,6 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -48,6 +52,7 @@ fun HomeScreen(
 
     val documents by viewModel.documents.collectAsState()
     val foldersWithCount by viewModel.foldersWithCount.collectAsState()
+    val allFoldersWithCount by viewModel.allFoldersWithCount.collectAsState()
     val selectedFolder by viewModel.selectedFolder.collectAsState()
     val searchQuery by viewModel.searchQuery.collectAsState()
     val sortOrder by viewModel.sortOrder.collectAsState()
@@ -67,6 +72,18 @@ fun HomeScreen(
     var showBatchPdfDialog by remember { mutableStateOf(false) }
     var showImportDialog by remember { mutableStateOf(false) }
     var isImporting by remember { mutableStateOf(false) }
+
+    // System Back button navigation
+    BackHandler(enabled = isSelectMode || isSearchExpanded || selectedFolder != null) {
+        if (isSelectMode) {
+            viewModel.clearSelection()
+        } else if (isSearchExpanded) {
+            isSearchExpanded = false
+            viewModel.onSearchQueryChanged("")
+        } else if (selectedFolder != null) {
+            viewModel.navigateUp()
+        }
+    }
 
     val imagePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetMultipleContents()
@@ -94,11 +111,11 @@ fun HomeScreen(
         }
     }
 
-    val totalDocCount = remember(documents, foldersWithCount, selectedFolder) {
+    val totalDocCount = remember(documents, allFoldersWithCount, selectedFolder) {
         if (selectedFolder != null) {
             documents.size
         } else {
-            val folderDocs = foldersWithCount.sumOf { it.docCount }
+            val folderDocs = allFoldersWithCount.sumOf { it.docCount }
             val rootDocs = documents.count { it.folderId <= 0 }
             rootDocs + folderDocs
         }
@@ -118,7 +135,7 @@ fun HomeScreen(
                 onToggleSearch = { isSearchExpanded = !isSearchExpanded },
                 selectedFolder = selectedFolder,
                 totalDocCount = totalDocCount,
-                foldersWithCount = foldersWithCount,
+                foldersWithCount = allFoldersWithCount,
                 onSelectFolder = { viewModel.selectFolder(it) },
                 sortOrder = sortOrder,
                 onSortOrderChanged = { viewModel.setSortOrder(it) },
@@ -126,6 +143,7 @@ fun HomeScreen(
                 onToggleGridView = { viewModel.toggleGridView() },
                 onEnterSelectMode = { viewModel.toggleSelectMode() },
                 onCreateFolderClick = { showNewFolderDialog = true },
+                onNavigateUp = { viewModel.navigateUp() },
                 onProfileClick = onNavigateToProfile,
                 showSubHeader = selectedTab == 0
             )
@@ -221,7 +239,7 @@ fun HomeScreen(
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 Icon(
-                                    Icons.Default.Description,
+                                    imageVector = if (selectedFolder != null) Icons.Default.FolderOpen else Icons.Default.Description,
                                     contentDescription = null,
                                     tint = colors.primary,
                                     modifier = Modifier.size(40.dp)
@@ -230,26 +248,43 @@ fun HomeScreen(
                         }
                         Spacer(modifier = Modifier.height(18.dp))
                         Text(
-                            text = if (searchQuery.isNotEmpty()) "No results found" else "No Scanned Documents",
+                            text = if (searchQuery.isNotEmpty()) "No results found"
+                            else if (selectedFolder != null) "Folder is Empty"
+                            else "No Scanned Documents",
                             color = colors.textPrimary,
                             fontWeight = FontWeight.Bold,
                             fontSize = 18.sp
                         )
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
-                            text = if (searchQuery.isNotEmpty()) "Try a different search keyword" else "Tap the camera shutter to scan your first page",
+                            text = if (searchQuery.isNotEmpty()) "Try a different search keyword"
+                            else if (selectedFolder != null) "Add documents or create subfolders inside '${selectedFolder?.name}'"
+                            else "Tap the camera shutter to scan your first page",
                             color = colors.textSecondary,
-                            fontSize = 13.sp
+                            fontSize = 13.sp,
+                            textAlign = TextAlign.Center
                         )
                         if (searchQuery.isEmpty()) {
                             Spacer(modifier = Modifier.height(24.dp))
-                            Button(
-                                onClick = { onNavigateToCamera(-1L, "Document") },
-                                colors = ButtonDefaults.buttonColors(containerColor = colors.primary)
-                            ) {
-                                Icon(Icons.Default.CameraAlt, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Start Scanning")
+                            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                if (selectedFolder != null) {
+                                    OutlinedButton(
+                                        onClick = { showNewFolderDialog = true },
+                                        colors = ButtonDefaults.outlinedButtonColors(contentColor = colors.primary)
+                                    ) {
+                                        Icon(Icons.Default.CreateNewFolder, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("New Subfolder")
+                                    }
+                                }
+                                Button(
+                                    onClick = { onNavigateToCamera(-1L, "Document") },
+                                    colors = ButtonDefaults.buttonColors(containerColor = colors.primary)
+                                ) {
+                                    Icon(Icons.Default.CameraAlt, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Start Scanning")
+                                }
                             }
                         }
                     }
@@ -263,12 +298,13 @@ fun HomeScreen(
                             verticalArrangement = Arrangement.spacedBy(12.dp),
                             modifier = Modifier.fillMaxSize()
                         ) {
-                            // Folders section inside grid (if not inside a folder)
-                            if (selectedFolder == null && foldersWithCount.isNotEmpty()) {
+                            // Folders section inside grid (top level or subfolders)
+                            if (foldersWithCount.isNotEmpty() || selectedFolder != null) {
                                 item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(2) }) {
                                     FolderSection(
                                         foldersWithCount = foldersWithCount,
                                         isGridView = true,
+                                        isInsideFolder = selectedFolder != null,
                                         onSelectFolder = { viewModel.selectFolder(it) },
                                         onRenameFolder = { folderToRename = it },
                                         onDeleteFolder = { viewModel.deleteFolder(it) },
@@ -305,12 +341,13 @@ fun HomeScreen(
                             contentPadding = PaddingValues(vertical = 8.dp),
                             modifier = Modifier.fillMaxSize()
                         ) {
-                            // Folders section inside list
-                            if (selectedFolder == null && foldersWithCount.isNotEmpty()) {
+                            // Folders section inside list (top level or subfolders)
+                            if (foldersWithCount.isNotEmpty() || selectedFolder != null) {
                                 item {
                                     FolderSection(
                                         foldersWithCount = foldersWithCount,
                                         isGridView = false,
+                                        isInsideFolder = selectedFolder != null,
                                         onSelectFolder = { viewModel.selectFolder(it) },
                                         onRenameFolder = { folderToRename = it },
                                         onDeleteFolder = { viewModel.deleteFolder(it) },
@@ -388,9 +425,9 @@ fun HomeScreen(
     if (showMoveCopyDialog) {
         MoveCopyDialog(
             selectedDocCount = selectedDocIds.size,
-            foldersWithCount = foldersWithCount,
+            foldersWithCount = allFoldersWithCount,
             onDismiss = { showMoveCopyDialog = false },
-            onCreateFolder = { name -> viewModel.createFolder(name) },
+            onCreateFolder = { name, parentId -> viewModel.createFolder(name, parentId) },
             onConfirm = { action, targetFolderId, folderName ->
                 val count = selectedDocIds.size
                 if (action == MoveCopyAction.MOVE) {
@@ -410,9 +447,9 @@ fun HomeScreen(
     docToMove?.let { doc ->
         MoveCopyDialog(
             selectedDocCount = 1,
-            foldersWithCount = foldersWithCount,
+            foldersWithCount = allFoldersWithCount,
             onDismiss = { docToMove = null },
-            onCreateFolder = { name -> viewModel.createFolder(name) },
+            onCreateFolder = { name, parentId -> viewModel.createFolder(name, parentId) },
             onConfirm = { action, targetFolderId, folderName ->
                 if (action == MoveCopyAction.MOVE) {
                     viewModel.moveDocumentToFolder(doc.id, targetFolderId)

@@ -108,6 +108,8 @@ class DocumentDetailViewModel(application: Application) : AndroidViewModel(appli
         pageIds: List<Long>,
         watermarkConfig: org.openscanner.cv.CollageWatermarkConfig? = null,
         slotTransforms: Map<Int, org.openscanner.cv.SlotTransform>? = null,
+        drawBorders: Boolean = false,
+        slotCustomPaths: Map<Int, String>? = null,
         onDone: () -> Unit
     ) {
         val docId = _document.value?.id ?: return
@@ -119,7 +121,9 @@ class DocumentDetailViewModel(application: Application) : AndroidViewModel(appli
                     pageIds = pageIds,
                     layout = layout,
                     watermarkConfig = watermarkConfig,
-                    slotTransforms = slotTransforms
+                    slotTransforms = slotTransforms,
+                    drawBorders = drawBorders,
+                    slotCustomPaths = slotCustomPaths
                 )
                 withContext(Dispatchers.Main) {
                     _isGeneratingPdf.value = false

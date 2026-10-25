@@ -27,13 +27,16 @@ import org.openscanner.ui.theme.ScannerTheme
 fun FolderSection(
     foldersWithCount: List<FolderWithCount>,
     isGridView: Boolean,
+    isInsideFolder: Boolean = false,
     onSelectFolder: (Folder) -> Unit,
     onRenameFolder: (Folder) -> Unit,
     onDeleteFolder: (Folder) -> Unit,
     onCreateFolderClick: () -> Unit
 ) {
     val colors = ScannerTheme.colors
-    if (foldersWithCount.isEmpty()) return
+    if (foldersWithCount.isEmpty() && !isInsideFolder) return
+
+    val title = if (isInsideFolder) "Subfolders (${foldersWithCount.size})" else "Folders (${foldersWithCount.size})"
 
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(
@@ -44,7 +47,7 @@ fun FolderSection(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "Folders (${foldersWithCount.size})",
+                text = title,
                 color = colors.textSecondary,
                 fontWeight = FontWeight.SemiBold,
                 fontSize = 13.sp

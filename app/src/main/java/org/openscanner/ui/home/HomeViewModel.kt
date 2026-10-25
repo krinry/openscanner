@@ -40,6 +40,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val _foldersWithCount = MutableStateFlow<List<FolderWithCount>>(emptyList())
     val foldersWithCount: StateFlow<List<FolderWithCount>> = _foldersWithCount
 
+    private val _allFoldersWithCount = MutableStateFlow<List<FolderWithCount>>(emptyList())
+    val allFoldersWithCount: StateFlow<List<FolderWithCount>> = _allFoldersWithCount
+
     private val _selectedFolder = MutableStateFlow<Folder?>(null)
     val selectedFolder: StateFlow<Folder?> = _selectedFolder
 
@@ -86,13 +89,16 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun refreshFolderCounts(folders: List<Folder>, docs: List<Document>) {
         val countMap = docs.filter { it.folderId > 0 }.groupBy { it.folderId }
-        val list = folders.map { folder ->
+        val allList = folders.map { folder ->
             FolderWithCount(
                 folder = folder,
                 docCount = countMap[folder.id]?.size ?: 0
             )
         }
-        _foldersWithCount.value = list
+        _allFoldersWithCount.value = allList
+
+        val currentParentId = _selectedFolder.value?.id ?: -1L
+        _foldersWithCount.value = allList.filter { it.folder.parentFolderId == currentParentId }
     }
 
     private fun applyFilterAndSort() {
@@ -105,6 +111,11 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         // Filter by folder if selected
         if (folder != null) {
             filtered = filtered.filter { it.folderId == folder.id }
+        } else {
+            // When at root level and not searching, show only root documents (folderId <= 0 or -1)
+            if (query.isBlank()) {
+                filtered = filtered.filter { it.folderId <= 0L }
+            }
         }
 
         // Filter by search query
@@ -125,7 +136,20 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     fun selectFolder(folder: Folder?) {
         _selectedFolder.value = folder
+        refreshFolderCounts(_folders.value, _rawDocuments.value)
         applyFilterAndSort()
+    }
+
+    fun navigateUp() {
+        val current = _selectedFolder.value ?: return
+        if (current.parentFolderId > 0) {
+            viewModelScope.launch {
+                val parent = repository.getFolderById(current.parentFolderId)
+                selectFolder(parent)
+            }
+        } else {
+            selectFolder(null)
+        }
     }
 
     fun onSearchQueryChanged(query: String) {
@@ -215,10 +239,11 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun createFolder(name: String) {
+    fun createFolder(name: String, parentFolderId: Long? = null) {
         if (name.isBlank()) return
+        val parentId = parentFolderId ?: (_selectedFolder.value?.id ?: -1L)
         viewModelScope.launch {
-            repository.createFolder(name)
+            repository.createFolder(name = name, parentFolderId = parentId)
         }
     }
 
@@ -233,7 +258,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             repository.deleteFolder(folder)
             if (_selectedFolder.value?.id == folder.id) {
-                _selectedFolder.value = null
+                navigateUp()
             }
         }
     }

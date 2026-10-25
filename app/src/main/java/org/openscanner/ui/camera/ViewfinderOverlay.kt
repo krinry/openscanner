@@ -257,7 +257,7 @@ fun ViewfinderOverlay(
                 }
 
                 else -> {
-                    // Dynamic Document Detection for Single, Batch modes
+                    // Dynamic Document Detection for Document mode
                     if (quad != null && previewWidth > 0 && previewHeight > 0) {
                         val scale = maxOf(size.width / previewWidth.toFloat(), size.height / previewHeight.toFloat())
                         val previewRenderW = previewWidth * scale

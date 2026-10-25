@@ -10,11 +10,13 @@ import android.graphics.RectF
 
 /**
  * Transformation parameters for individual collage slot images.
+ * Pan coordinates are normalized fractions (-1.5f to 1.5f) relative to slot dimensions.
  */
 data class SlotTransform(
     val scale: Float = 1.0f,
     val panX: Float = 0.0f,
-    val panY: Float = 0.0f
+    val panY: Float = 0.0f,
+    val rotation: Float = 0.0f
 )
 
 /**
@@ -184,7 +186,7 @@ object CollageGenerator {
         layout: CollageLayout,
         canvasWidth: Int = A4_WIDTH_300DPI,
         canvasHeight: Int = A4_HEIGHT_300DPI,
-        drawBorders: Boolean = true,
+        drawBorders: Boolean = false,
         watermarkConfig: CollageWatermarkConfig? = null,
         slotTransforms: Map<Int, SlotTransform>? = null
     ): Bitmap {
@@ -228,7 +230,7 @@ object CollageGenerator {
         layout: CollageLayout,
         canvasWidth: Int = A4_WIDTH_300DPI,
         canvasHeight: Int = A4_HEIGHT_300DPI,
-        drawBorders: Boolean = true,
+        drawBorders: Boolean = false,
         watermarkConfig: CollageWatermarkConfig? = null,
         slotTransforms: Map<Int, SlotTransform>? = null
     ): Bitmap {
@@ -338,21 +340,32 @@ object CollageGenerator {
         if (slotW <= 0f || slotH <= 0f) return
 
         val baseScale = minOf(slotW / bmpW, slotH / bmpH)
-        val userScale = (transform?.scale ?: 1.0f).coerceIn(0.5f, 4.0f)
+        val userScale = (transform?.scale ?: 1.0f).coerceIn(0.2f, 5.0f)
         val scale = baseScale * userScale
         val drawW = bmpW * scale
         val drawH = bmpH * scale
 
-        // Pan normalized to slot dimensions
-        val panX = (transform?.panX ?: 0f) * (slotW / 300f)
-        val panY = (transform?.panY ?: 0f) * (slotH / 300f)
+        // Pan normalized to whole canvas dimensions, allowing free movement across the entire page
+        val canW = if (canvas.width > 0) canvas.width.toFloat() else slotW
+        val canH = if (canvas.height > 0) canvas.height.toFloat() else slotH
+        val panX = (transform?.panX ?: 0f) * canW
+        val panY = (transform?.panY ?: 0f) * canH
+        val rotation = transform?.rotation ?: 0f
 
-        val drawLeft = slotRect.left + (slotW - drawW) / 2f + panX
-        val drawTop = slotRect.top + (slotH - drawH) / 2f + panY
+        val cx = slotRect.left + slotW / 2f + panX
+        val cy = slotRect.top + slotH / 2f + panY
+
+        val drawLeft = cx - drawW / 2f
+        val drawTop = cy - drawH / 2f
         val destRect = RectF(drawLeft, drawTop, drawLeft + drawW, drawTop + drawH)
 
         canvas.save()
-        canvas.clipRect(slotRect)
+        if (canW > 0 && canH > 0) {
+            canvas.clipRect(0f, 0f, canW, canH)
+        }
+        if (rotation != 0f) {
+            canvas.rotate(rotation, cx, cy)
+        }
         canvas.drawBitmap(bitmap, null, destRect, bitmapPaint)
         if (borderPaint != null) {
             canvas.drawRect(destRect, borderPaint)

@@ -1,5 +1,6 @@
 package org.openscanner.ui
 
+import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.Dispatchers
@@ -136,5 +137,74 @@ class HomeViewModelTest {
 
         viewModel.setSortOrder(DocSortOrder.NAME_ASC)
         assertEquals(DocSortOrder.NAME_ASC, viewModel.sortOrder.value)
+    }
+
+    @Test
+    fun testRootVsFolderDocumentFiltering() {
+        val rootDoc = Document(id = 1L, title = "Root Doc", folderId = -1L)
+        val folderDoc = Document(id = 2L, title = "Folder Doc", folderId = 5L)
+        val folder = Folder(id = 5L, name = "Finance")
+
+        every { folderDao.getAllFolders() } returns flowOf(listOf(folder))
+        every { documentDao.getAllDocuments() } returns flowOf(listOf(rootDoc, folderDoc))
+
+        val vm = HomeViewModel(app)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        // At root level, only root documents (folderId <= 0) should be visible
+        assertEquals(1, vm.documents.value.size)
+        assertEquals(1L, vm.documents.value.first().id)
+
+        // When folder 5 is selected, only documents inside folder 5 should be visible
+        vm.selectFolder(folder)
+        testDispatcher.scheduler.advanceUntilIdle()
+        assertEquals(1, vm.documents.value.size)
+        assertEquals(2L, vm.documents.value.first().id)
+
+        // When navigating back to root, root document is visible again and folder doc is hidden
+        vm.selectFolder(null)
+        testDispatcher.scheduler.advanceUntilIdle()
+        assertEquals(1, vm.documents.value.size)
+        assertEquals(1L, vm.documents.value.first().id)
+    }
+
+    @Test
+    fun testNestedSubfolderHierarchyAndNavigation() {
+        val rootFolder = Folder(id = 10L, name = "Work", parentFolderId = -1L)
+        val subFolder = Folder(id = 20L, name = "2026 Taxes", parentFolderId = 10L)
+
+        every { folderDao.getAllFolders() } returns flowOf(listOf(rootFolder, subFolder))
+        coEvery { folderDao.getFolderById(10L) } returns rootFolder
+        coEvery { folderDao.getFolderById(20L) } returns subFolder
+        every { documentDao.getAllDocuments() } returns flowOf(emptyList())
+
+        val vm = HomeViewModel(app)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        // At root level: allFoldersWithCount has 2, foldersWithCount has only rootFolder (parentFolderId = -1)
+        assertEquals(2, vm.allFoldersWithCount.value.size)
+        assertEquals(1, vm.foldersWithCount.value.size)
+        assertEquals(10L, vm.foldersWithCount.value.first().folder.id)
+
+        // Select rootFolder (Work): foldersWithCount now contains subFolder (parentFolderId = 10)
+        vm.selectFolder(rootFolder)
+        testDispatcher.scheduler.advanceUntilIdle()
+        assertEquals(1, vm.foldersWithCount.value.size)
+        assertEquals(20L, vm.foldersWithCount.value.first().folder.id)
+
+        // Select subFolder
+        vm.selectFolder(subFolder)
+        testDispatcher.scheduler.advanceUntilIdle()
+        assertEquals(0, vm.foldersWithCount.value.size) // No sub-subfolders
+
+        // navigateUp() from subFolder -> rootFolder
+        vm.navigateUp()
+        testDispatcher.scheduler.advanceUntilIdle()
+        assertEquals(10L, vm.selectedFolder.value?.id)
+
+        // navigateUp() from rootFolder -> Root (null)
+        vm.navigateUp()
+        testDispatcher.scheduler.advanceUntilIdle()
+        assertNull(vm.selectedFolder.value)
     }
 }

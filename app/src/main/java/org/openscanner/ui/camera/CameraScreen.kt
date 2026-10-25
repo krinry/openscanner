@@ -59,7 +59,7 @@ import java.util.concurrent.Executors
 @Composable
 fun CameraScreen(
     docId: Long,
-    initialMode: String = "Single",
+    initialMode: String = "Document",
     onPhotoCaptured: (imagePath: String, docId: Long) -> Unit,
     onClose: () -> Unit,
     viewModel: CameraViewModel = viewModel()
@@ -89,7 +89,11 @@ fun CameraScreen(
                             input.copyTo(output)
                         }
                     }
-                    onPhotoCaptured(targetFile.absolutePath, docId)
+                    if (viewModel.currentMode.value == CaptureMode.DOCUMENT) {
+                        viewModel.addDocumentItemFromFile(targetFile.absolutePath)
+                    } else {
+                        onPhotoCaptured(targetFile.absolutePath, docId)
+                    }
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }
@@ -296,8 +300,8 @@ fun CameraScreen(
                 .padding(bottom = 36.dp, top = 12.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Batch Mode Filmstrip Queue
-            if (currentMode == CaptureMode.BATCH && batchQueue.isNotEmpty()) {
+            // Document Mode Filmstrip Queue
+            if (currentMode == CaptureMode.DOCUMENT && batchQueue.isNotEmpty()) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -455,11 +459,11 @@ fun CameraScreen(
                             .clickable {
                                 imageCapture?.let { capture ->
                                     when (currentMode) {
-                                        CaptureMode.BATCH -> {
+                                        CaptureMode.DOCUMENT -> {
                                             viewModel.captureBatchPhoto(
                                                 imageCapture = capture,
-                                                onSuccess = { /* Batch item added */ },
-                                                onError = { Toast.makeText(context, "Batch capture failed", Toast.LENGTH_SHORT).show() }
+                                                onSuccess = { /* Document item added */ },
+                                                onError = { Toast.makeText(context, "Document capture failed", Toast.LENGTH_SHORT).show() }
                                             )
                                         }
                                         CaptureMode.ID_CARD -> {
@@ -565,8 +569,8 @@ fun CameraScreen(
                         )
                     }
 
-                    // Shutter badge for Batch mode
-                    if (currentMode == CaptureMode.BATCH && batchCount > 0) {
+                    // Shutter badge for Document mode
+                    if (currentMode == CaptureMode.DOCUMENT && batchCount > 0) {
                         Surface(
                             modifier = Modifier
                                 .align(Alignment.TopEnd)
@@ -587,8 +591,8 @@ fun CameraScreen(
                     }
                 }
 
-                // Right slot: Review action (BATCH), Front thumbnail (ID_CARD Step 2), or Spacer
-                if (currentMode == CaptureMode.BATCH && batchCount > 0) {
+                // Right slot: Review action (DOCUMENT), Front thumbnail (ID_CARD Step 2), or Spacer
+                if (currentMode == CaptureMode.DOCUMENT && batchCount > 0) {
                     Surface(
                         modifier = Modifier
                             .size(52.dp)
@@ -601,7 +605,7 @@ fun CameraScreen(
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                 Icon(
                                     Icons.AutoMirrored.Filled.ArrowForward,
-                                    contentDescription = "Review Batch",
+                                    contentDescription = "Review Document",
                                     tint = Color.White,
                                     modifier = Modifier.size(22.dp)
                                 )
