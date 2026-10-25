@@ -33,6 +33,7 @@ import org.openscanner.ui.theme.ScannerTheme
 fun HomeScreen(
     onNavigateToCamera: (docId: Long, mode: String) -> Unit,
     onNavigateToDetail: (docId: Long) -> Unit,
+    onNavigateToProfile: () -> Unit = {},
     viewModel: HomeViewModel = viewModel()
 ) {
     val context = LocalContext.current
@@ -115,6 +116,7 @@ fun HomeScreen(
                 onToggleGridView = { viewModel.toggleGridView() },
                 onEnterSelectMode = { viewModel.toggleSelectMode() },
                 onCreateFolderClick = { showNewFolderDialog = true },
+                onProfileClick = onNavigateToProfile,
                 showSubHeader = selectedTab == 0
             )
         },

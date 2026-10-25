@@ -185,20 +185,25 @@ object EdgeDetector {
 
         // 5. Fallback Candidate: Approximate from all threshold edge pixels if no blob found
         if (bestQuad == null) {
-            val threshold = (meanGrad * 1.5f).toInt().coerceAtLeast(20)
+            val threshold = max(20, (meanGrad * 1.2f).toInt())
             val edgePoints = mutableListOf<PointF>()
-            val borderMargin = 6
-            for (y in borderMargin until sh - borderMargin) {
+            val borderMargin = 5
+            for (y in borderMargin until sh - borderMargin step 2) {
                 val yOffset = y * sw
-                for (x in borderMargin until sw - borderMargin) {
+                for (x in borderMargin until sw - borderMargin step 2) {
                     if (mag[yOffset + x] > threshold) {
                         edgePoints.add(PointF(x.toFloat(), y.toFloat()))
                     }
                 }
             }
-            if (edgePoints.size >= 8) {
+            if (edgePoints.size >= 12) {
                 val hull = computeConvexHull(edgePoints)
-                bestQuad = approximateQuadrilateral(hull, sw.toFloat(), sh.toFloat())
+                val candidate = extractBestQuadFromHull(hull)
+                if (candidate != null && isValidDocumentQuad(candidate, sw.toFloat(), sh.toFloat())) {
+                    bestQuad = candidate
+                } else {
+                    bestQuad = approximateQuadrilateral(hull, sw.toFloat(), sh.toFloat())
+                }
             }
         }
 
@@ -463,14 +468,14 @@ object EdgeDetector {
         }
 
         val coverage = validEdgeHits.toFloat() / max(1, totalSamples)
-        if (coverage < 0.45f) return -1.0f
+        if (coverage < 0.20f) return -1.0f
 
         val borderRatio = borderPenaltyHits.toFloat() / max(1, totalSamples)
-        if (borderRatio > 0.35f) return -1.0f
+        if (borderRatio > 0.50f) return -1.0f
 
         val avgGrad = totalDirectionalGrad / max(1, totalSamples)
         val areaRatio = quadArea(q[0], q[1], q[2], q[3]) / (w * h).toFloat()
-        return (avgGrad * (coverage * coverage) * Math.pow(areaRatio.toDouble(), 0.25).toFloat() * (1.0f - 0.5f * borderRatio))
+        return (avgGrad * coverage * Math.pow(areaRatio.toDouble(), 0.25).toFloat() * (1.0f - 0.5f * borderRatio))
     }
 
     private fun extractRadialEdgePoints(

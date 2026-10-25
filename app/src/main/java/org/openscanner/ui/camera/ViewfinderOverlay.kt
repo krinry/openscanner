@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.openscanner.camera.CaptureMode
 import org.openscanner.cv.DocumentQuadrilateral
+import org.openscanner.cv.PointF
 import org.openscanner.cv.IdCardCropper
 import org.openscanner.ui.theme.ScannerGreen
 
@@ -213,12 +214,18 @@ fun ViewfinderOverlay(
 
                     // Retain document boundary quad detection if document detected
                     if (quad != null && previewWidth > 0 && previewHeight > 0) {
-                        val scaleX = size.width / previewWidth
-                        val scaleY = size.height / previewHeight
-                        val p1 = Offset(quad.topLeft.x * scaleX, quad.topLeft.y * scaleY)
-                        val p2 = Offset(quad.topRight.x * scaleX, quad.topRight.y * scaleY)
-                        val p3 = Offset(quad.bottomRight.x * scaleX, quad.bottomRight.y * scaleY)
-                        val p4 = Offset(quad.bottomLeft.x * scaleX, quad.bottomLeft.y * scaleY)
+                        val scale = maxOf(size.width / previewWidth.toFloat(), size.height / previewHeight.toFloat())
+                        val previewRenderW = previewWidth * scale
+                        val previewRenderH = previewHeight * scale
+                        val offsetX = (size.width - previewRenderW) / 2f
+                        val offsetY = (size.height - previewRenderH) / 2f
+
+                        fun mapToScreen(p: PointF): Offset = Offset(offsetX + p.x * scale, offsetY + p.y * scale)
+
+                        val p1 = mapToScreen(quad.topLeft)
+                        val p2 = mapToScreen(quad.topRight)
+                        val p3 = mapToScreen(quad.bottomRight)
+                        val p4 = mapToScreen(quad.bottomLeft)
 
                         val polyPath = Path().apply {
                             moveTo(p1.x, p1.y)
@@ -252,13 +259,18 @@ fun ViewfinderOverlay(
                 else -> {
                     // Dynamic Document Detection for Single, Batch modes
                     if (quad != null && previewWidth > 0 && previewHeight > 0) {
-                        val scaleX = size.width / previewWidth
-                        val scaleY = size.height / previewHeight
+                        val scale = maxOf(size.width / previewWidth.toFloat(), size.height / previewHeight.toFloat())
+                        val previewRenderW = previewWidth * scale
+                        val previewRenderH = previewHeight * scale
+                        val offsetX = (size.width - previewRenderW) / 2f
+                        val offsetY = (size.height - previewRenderH) / 2f
 
-                        val p1 = Offset(quad.topLeft.x * scaleX, quad.topLeft.y * scaleY)
-                        val p2 = Offset(quad.topRight.x * scaleX, quad.topRight.y * scaleY)
-                        val p3 = Offset(quad.bottomRight.x * scaleX, quad.bottomRight.y * scaleY)
-                        val p4 = Offset(quad.bottomLeft.x * scaleX, quad.bottomLeft.y * scaleY)
+                        fun mapToScreen(p: PointF): Offset = Offset(offsetX + p.x * scale, offsetY + p.y * scale)
+
+                        val p1 = mapToScreen(quad.topLeft)
+                        val p2 = mapToScreen(quad.topRight)
+                        val p3 = mapToScreen(quad.bottomRight)
+                        val p4 = mapToScreen(quad.bottomLeft)
 
                         val polyPath = Path().apply {
                             moveTo(p1.x, p1.y)

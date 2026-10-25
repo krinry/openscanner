@@ -328,16 +328,16 @@ static float scoreQuadEdgeSupport(
     }
 
     float coverage = static_cast<float>(validEdgeHits) / std::max(1, totalSamples);
-    if (coverage < 0.45f) return -1.0f; // Reject if less than 45% of boundary has real edges
+    if (coverage < 0.20f) return -1.0f; // Accept candidates with at least 20% clear edge hits
 
     float borderRatio = static_cast<float>(borderPenaltyHits) / std::max(1, totalSamples);
-    if (borderRatio > 0.35f) return -1.0f; // Reject full-frame border false positives
+    if (borderRatio > 0.50f) return -1.0f; // Reject full-frame border false positives
 
     float avgGrad = totalDirectionalGrad / std::max(1, totalSamples);
     float areaRatio = quadArea(pts[0], pts[1], pts[2], pts[3]) / static_cast<float>(w * h);
 
-    // Combine edge coverage, edge contrast, and moderately large page area
-    return avgGrad * (coverage * coverage) * std::pow(areaRatio, 0.25f) * (1.0f - 0.5f * borderRatio);
+    // Combine edge coverage, edge contrast, and page area
+    return avgGrad * coverage * std::pow(areaRatio, 0.25f) * (1.0f - 0.5f * borderRatio);
 }
 
 // Extract connected foreground blob near the center and return its boundary points
@@ -610,6 +610,26 @@ Quad detectDocumentBounds(const uint8_t* grayBuffer, int width, int height) {
                     bestScore = score;
                     bestQuad = candidate;
                 }
+            }
+        }
+    }
+
+    if (bestScore < 0.0f) {
+        int edgeThresh = std::max(20, meanGrad * 12 / 10);
+        std::vector<Point2D> directPts;
+        for (int y = 5; y < sh - 5; y += 2) {
+            for (int x = 5; x < sw - 5; x += 2) {
+                if (mag[y * sw + x] > edgeThresh) {
+                    directPts.push_back({static_cast<float>(x), static_cast<float>(y)});
+                }
+            }
+        }
+        if (directPts.size() >= 12) {
+            std::vector<Point2D> hull = computeConvexHull(directPts);
+            Quad candidate;
+            if (extractBestQuadFromHull(hull, candidate) && isValidQuadGeometry(candidate, sw, sh)) {
+                bestQuad = candidate;
+                bestScore = 1.0f;
             }
         }
     }

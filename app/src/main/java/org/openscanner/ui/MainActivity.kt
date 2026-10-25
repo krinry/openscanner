@@ -26,6 +26,7 @@ import org.openscanner.ui.navigation.Screen
 import org.openscanner.ui.theme.OpenScannerTheme
 import org.openscanner.ui.theme.ThemeManager
 import org.openscanner.ui.viewer.PageViewerScreen
+import org.openscanner.ui.profile.ProfileScreen
 
 class MainActivity : ComponentActivity() {
 
@@ -61,6 +62,9 @@ class MainActivity : ComponentActivity() {
                                 },
                                 onNavigateToDetail = { docId ->
                                     navController.navigate(Screen.DocumentDetail.createRoute(docId))
+                                },
+                                onNavigateToProfile = {
+                                    navController.navigate(Screen.Profile.route)
                                 }
                             )
                         }
@@ -155,6 +159,12 @@ class MainActivity : ComponentActivity() {
                             PageViewerScreen(
                                 pageId = pageId,
                                 onNavigateBack = { navController.popBackStack() }
+                            )
+                        }
+
+                        composable(Screen.Profile.route) {
+                            ProfileScreen(
+                                onBack = { navController.popBackStack() }
                             )
                         }
                     }

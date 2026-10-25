@@ -48,6 +48,7 @@ fun HomeTopBar(
     onToggleGridView: () -> Unit,
     onEnterSelectMode: () -> Unit,
     onCreateFolderClick: () -> Unit,
+    onProfileClick: () -> Unit = {},
     showSubHeader: Boolean = true
 ) {
     val context = LocalContext.current
@@ -94,7 +95,9 @@ fun HomeTopBar(
             ) {
                 // User Profile Avatar
                 Surface(
-                    modifier = Modifier.size(36.dp),
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clickable(onClick = onProfileClick),
                     shape = CircleShape,
                     color = colors.primaryContainer,
                     border = BorderStroke(1.5.dp, colors.primary)

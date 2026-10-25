@@ -18,4 +18,5 @@ sealed class Screen(val route: String) {
     object PageViewer : Screen("viewer/{pageId}") {
         fun createRoute(pageId: Long): String = "viewer/$pageId"
     }
+    object Profile : Screen("profile")
 }

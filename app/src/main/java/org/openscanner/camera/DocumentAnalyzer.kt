@@ -4,7 +4,6 @@ import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import org.openscanner.cv.DocumentQuadrilateral
 import org.openscanner.cv.NativeScannerEngine
-import org.openscanner.cv.PointF
 import java.nio.ByteBuffer
 
 class DocumentAnalyzer(
@@ -15,8 +14,8 @@ class DocumentAnalyzer(
 
     override fun analyze(image: ImageProxy) {
         val currentTimestamp = System.currentTimeMillis()
-        // Throttle slightly to ~30-40 fps to conserve battery and CPU
-        if (currentTimestamp - lastAnalyzedTimestamp < 25) {
+        // Throttle to ~30 fps to conserve battery and CPU
+        if (currentTimestamp - lastAnalyzedTimestamp < 30) {
             image.close()
             return
         }
@@ -35,10 +34,50 @@ class DocumentAnalyzer(
 
         val width = image.width
         val height = image.height
+        val rotation = image.imageInfo.rotationDegrees
 
-        val quad = NativeScannerEngine.detectDocumentBounds(yuvBytes, width, height)
+        // Rotate Y-plane to match upright display orientation
+        val (rotatedBytes, rotW, rotH) = rotateYPlane(yuvBytes, width, height, rotation)
 
-        onDocumentDetected(quad, width, height)
+        val quad = NativeScannerEngine.detectDocumentBounds(rotatedBytes, rotW, rotH)
+
+        onDocumentDetected(quad, rotW, rotH)
         image.close()
+    }
+
+    companion object {
+        fun rotateYPlane(src: ByteArray, width: Int, height: Int, rotation: Int): Triple<ByteArray, Int, Int> {
+            return when (rotation) {
+                90 -> {
+                    val dst = ByteArray(width * height)
+                    var dstIdx = 0
+                    for (x in 0 until width) {
+                        for (y in height - 1 downTo 0) {
+                            dst[dstIdx++] = src[y * width + x]
+                        }
+                    }
+                    Triple(dst, height, width)
+                }
+                180 -> {
+                    val dst = ByteArray(width * height)
+                    val total = width * height
+                    for (i in 0 until total) {
+                        dst[i] = src[total - 1 - i]
+                    }
+                    Triple(dst, width, height)
+                }
+                270 -> {
+                    val dst = ByteArray(width * height)
+                    var dstIdx = 0
+                    for (x in width - 1 downTo 0) {
+                        for (y in 0 until height) {
+                            dst[dstIdx++] = src[y * width + x]
+                        }
+                    }
+                    Triple(dst, height, width)
+                }
+                else -> Triple(src, width, height)
+            }
+        }
     }
 }

@@ -99,6 +99,20 @@ fun CropScreen(
         withContext(Dispatchers.IO) {
             val file = File(imagePath)
             if (file.exists()) {
+                var exifDegrees = 0
+                try {
+                    val exif = android.media.ExifInterface(file.absolutePath)
+                    val orientation = exif.getAttributeInt(android.media.ExifInterface.TAG_ORIENTATION, android.media.ExifInterface.ORIENTATION_NORMAL)
+                    exifDegrees = when (orientation) {
+                        android.media.ExifInterface.ORIENTATION_ROTATE_90 -> 90
+                        android.media.ExifInterface.ORIENTATION_ROTATE_180 -> 180
+                        android.media.ExifInterface.ORIENTATION_ROTATE_270 -> 270
+                        else -> 0
+                    }
+                } catch (e: Exception) { /* Ignore */ }
+
+                val totalRotation = (rotationDegrees + exifDegrees) % 360
+
                 val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
                 BitmapFactory.decodeFile(file.absolutePath, opts)
                 var sampleSize = 1
@@ -110,8 +124,8 @@ fun CropScreen(
                     inPreferredConfig = Bitmap.Config.ARGB_8888
                 }
                 val decoded = BitmapFactory.decodeFile(file.absolutePath, decodeOpts)
-                if (decoded != null && rotationDegrees != 0) {
-                    val m = Matrix().apply { postRotate(rotationDegrees.toFloat()) }
+                if (decoded != null && totalRotation != 0) {
+                    val m = Matrix().apply { postRotate(totalRotation.toFloat()) }
                     bitmap = Bitmap.createBitmap(decoded, 0, 0, decoded.width, decoded.height, m, true)
                 } else {
                     bitmap = decoded
@@ -130,10 +144,23 @@ fun CropScreen(
 
             // Map coordinates back to original full-resolution image
             val file = File(imagePath)
+            var exifDegrees = 0
+            try {
+                val exif = android.media.ExifInterface(file.absolutePath)
+                val orientation = exif.getAttributeInt(android.media.ExifInterface.TAG_ORIENTATION, android.media.ExifInterface.ORIENTATION_NORMAL)
+                exifDegrees = when (orientation) {
+                    android.media.ExifInterface.ORIENTATION_ROTATE_90 -> 90
+                    android.media.ExifInterface.ORIENTATION_ROTATE_180 -> 180
+                    android.media.ExifInterface.ORIENTATION_ROTATE_270 -> 270
+                    else -> 0
+                }
+            } catch (e: Exception) { /* Ignore */ }
+            val totalRotation = (rotationDegrees + exifDegrees) % 360
+
             val originalOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeFile(file.absolutePath, originalOpts)
-            val origW = if (rotationDegrees % 180 == 0) originalOpts.outWidth.toFloat() else originalOpts.outHeight.toFloat()
-            val origH = if (rotationDegrees % 180 == 0) originalOpts.outHeight.toFloat() else originalOpts.outWidth.toFloat()
+            val origW = if (totalRotation % 180 == 0) originalOpts.outWidth.toFloat() else originalOpts.outHeight.toFloat()
+            val origH = if (totalRotation % 180 == 0) originalOpts.outHeight.toFloat() else originalOpts.outWidth.toFloat()
 
             fun mapPoint(pt: PointF): PointF {
                 val nx = ((pt.x - fitRect.left) / renderW).coerceIn(0f, 1f)
