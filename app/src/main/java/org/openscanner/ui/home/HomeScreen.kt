@@ -3,6 +3,7 @@ package org.openscanner.ui.home
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -10,12 +11,15 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -56,6 +60,7 @@ fun HomeScreen(
     var docToMove by remember { mutableStateOf<Document?>(null) }
     var showMoveToFolderDialog by remember { mutableStateOf(false) }
     var showBatchPdfDialog by remember { mutableStateOf(false) }
+    var showImportDialog by remember { mutableStateOf(false) }
     var isImporting by remember { mutableStateOf(false) }
 
     val imagePickerLauncher = rememberLauncherForActivityResult(
@@ -145,10 +150,38 @@ fun HomeScreen(
             if (selectedTab == 1) {
                 HomeToolsTab(
                     onScanIdCard = { onNavigateToCamera(-1L, "ID Card") },
+                    onScanDocs = { onNavigateToCamera(-1L, "Single") },
                     onScanBook = { onNavigateToCamera(-1L, "Book") },
-                    onImportImages = { imagePickerLauncher.launch("image/*") },
-                    onImportPdf = { pdfPickerLauncher.launch(arrayOf("application/pdf")) },
-                    onSignTool = { onNavigateToCamera(-1L, "Signature") }
+                    onScanQr = { onNavigateToCamera(-1L, "QR") },
+                    onToText = { onNavigateToCamera(-1L, "Single") },
+                    onImportFiles = { showImportDialog = true },
+                    onCollageImages = {
+                        val firstDoc = documents.firstOrNull()
+                        if (firstDoc != null) onNavigateToDetail(firstDoc.id)
+                        else Toast.makeText(context, "Scan or import documents first to create collage", Toast.LENGTH_SHORT).show()
+                    },
+                    onPdfWatermark = {
+                        val firstDoc = documents.firstOrNull()
+                        if (firstDoc != null) onNavigateToDetail(firstDoc.id)
+                        else Toast.makeText(context, "Scan or import documents first to add watermark", Toast.LENGTH_SHORT).show()
+                    },
+                    onPdfMerge = { showBatchPdfDialog = true },
+                    onPdfCompression = {
+                        val firstDoc = documents.firstOrNull()
+                        if (firstDoc != null) onNavigateToDetail(firstDoc.id)
+                        else Toast.makeText(context, "Scan or import documents first to compress", Toast.LENGTH_SHORT).show()
+                    },
+                    onPdfSignature = { onNavigateToCamera(-1L, "Signature") },
+                    onPdfPassword = {
+                        val firstDoc = documents.firstOrNull()
+                        if (firstDoc != null) onNavigateToDetail(firstDoc.id)
+                        else Toast.makeText(context, "Scan or import documents first to protect with password", Toast.LENGTH_SHORT).show()
+                    },
+                    onPageReorder = {
+                        val firstDoc = documents.firstOrNull()
+                        if (firstDoc != null) onNavigateToDetail(firstDoc.id)
+                        else Toast.makeText(context, "Scan or import documents first to reorder pages", Toast.LENGTH_SHORT).show()
+                    }
                 )
             } else {
                 // Documents Tab Content
@@ -349,5 +382,50 @@ fun HomeScreen(
         val firstSelectedDocId = selectedDocIds.first()
         showBatchPdfDialog = false
         onNavigateToDetail(firstSelectedDocId)
+    }
+
+    if (showImportDialog) {
+        AlertDialog(
+            onDismissRequest = { showImportDialog = false },
+            title = { Text("Import Files", color = colors.textPrimary, fontWeight = FontWeight.Bold) },
+            text = {
+                Column {
+                    Text("Select file type to import into OpenScanner:", color = colors.textSecondary, fontSize = 14.sp)
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Button(
+                        onClick = {
+                            showImportDialog = false
+                            imagePickerLauncher.launch("image/*")
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = colors.primary)
+                    ) {
+                        Icon(Icons.Default.AddPhotoAlternate, contentDescription = null, tint = Color.White)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Import Photos from Gallery", color = Color.White)
+                    }
+                    Spacer(modifier = Modifier.height(10.dp))
+                    OutlinedButton(
+                        onClick = {
+                            showImportDialog = false
+                            pdfPickerLauncher.launch(arrayOf("application/pdf"))
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        border = BorderStroke(1.dp, colors.primary)
+                    ) {
+                        Icon(Icons.Default.PictureAsPdf, contentDescription = null, tint = colors.primary)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Import PDF Document", color = colors.textPrimary)
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { showImportDialog = false }) {
+                    Text("Cancel", color = colors.textSecondary)
+                }
+            },
+            containerColor = colors.surface
+        )
     }
 }

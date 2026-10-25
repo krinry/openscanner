@@ -34,6 +34,7 @@ class BatchWarpProcessor(
         targetDocId: Long,
         items: List<BatchCaptureItem>,
         selectedEnhanceMode: EnhanceMode = EnhanceMode.MAGIC_COLOR,
+        customTitle: String? = null,
         onProgress: (completed: Int, total: Int) -> Unit
     ): Long = withContext(Dispatchers.Default) {
         val total = items.size
@@ -43,8 +44,11 @@ class BatchWarpProcessor(
         val semaphore = Semaphore(2)
 
         val docId = if (targetDocId <= 0L) {
-            repository.createNewDocument()
+            repository.createNewDocument(title = customTitle)
         } else {
+            if (customTitle != null) {
+                repository.renameDocument(targetDocId, customTitle)
+            }
             targetDocId
         }
 

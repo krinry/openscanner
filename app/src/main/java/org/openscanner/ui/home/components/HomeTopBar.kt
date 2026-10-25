@@ -112,9 +112,9 @@ fun HomeTopBar(
                     }
                 }
 
-                // OpenScanner Logo
+                // OpenScanner / Shortcuts Logo
                 Text(
-                    text = "OpenScanner",
+                    text = if (showSubHeader) "OpenScanner" else "Shortcuts",
                     color = colors.primary,
                     fontWeight = FontWeight.ExtraBold,
                     fontSize = 21.sp,

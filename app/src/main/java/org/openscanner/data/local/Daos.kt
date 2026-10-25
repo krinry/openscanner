@@ -60,6 +60,9 @@ interface DocumentDao {
 
     @Query("UPDATE documents SET pageCount = :count, modifiedTime = :time WHERE id = :docId")
     suspend fun updatePageCount(docId: Long, count: Int, time: Long = System.currentTimeMillis())
+
+    @Query("UPDATE documents SET title = :title, modifiedTime = :time WHERE id = :id")
+    suspend fun updateDocumentTitle(id: Long, title: String, time: Long = System.currentTimeMillis())
 }
 
 @Dao
