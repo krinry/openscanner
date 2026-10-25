@@ -4,6 +4,7 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -13,8 +14,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.PictureAsPdf
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -58,7 +61,9 @@ fun HomeScreen(
     var folderToRename by remember { mutableStateOf<Folder?>(null) }
     var docToRename by remember { mutableStateOf<Document?>(null) }
     var docToMove by remember { mutableStateOf<Document?>(null) }
-    var showMoveToFolderDialog by remember { mutableStateOf(false) }
+    var showMoveCopyDialog by remember { mutableStateOf(false) }
+    var showMergeDialog by remember { mutableStateOf(false) }
+    var showMoreMenu by remember { mutableStateOf(false) }
     var showBatchPdfDialog by remember { mutableStateOf(false) }
     var showImportDialog by remember { mutableStateOf(false) }
     var isImporting by remember { mutableStateOf(false) }
@@ -129,15 +134,30 @@ fun HomeScreen(
             if (isSelectMode) {
                 BatchSelectionBottomBar(
                     selectedCount = selectedDocIds.size,
-                    onMoveToFolder = { showMoveToFolderDialog = true },
+                    onShare = {
+                        if (selectedDocIds.isNotEmpty()) {
+                            showBatchPdfDialog = true
+                        }
+                    },
+                    onMoveCopy = { showMoveCopyDialog = true },
+                    onRename = {
+                        val singleId = selectedDocIds.firstOrNull()
+                        if (singleId != null) {
+                            val doc = documents.find { it.id == singleId }
+                            if (doc != null) {
+                                docToRename = doc
+                            }
+                        }
+                    },
+                    onMerge = { showMergeDialog = true },
                     onDeleteSelected = { viewModel.batchDeleteSelected() },
-                    onExportPdf = { showBatchPdfDialog = true }
+                    onMore = { showMoreMenu = true }
                 )
             } else {
                 HomeBottomBar(
                     selectedTab = selectedTab,
                     onTabSelected = { selectedTab = it },
-                    onCameraClick = { onNavigateToCamera(-1L, "Single") }
+                    onCameraClick = { onNavigateToCamera(-1L, "Document") }
                 )
             }
         }
@@ -150,10 +170,10 @@ fun HomeScreen(
             if (selectedTab == 1) {
                 HomeToolsTab(
                     onScanIdCard = { onNavigateToCamera(-1L, "ID Card") },
-                    onScanDocs = { onNavigateToCamera(-1L, "Single") },
+                    onScanDocs = { onNavigateToCamera(-1L, "Document") },
                     onScanBook = { onNavigateToCamera(-1L, "Book") },
                     onScanQr = { onNavigateToCamera(-1L, "QR") },
-                    onToText = { onNavigateToCamera(-1L, "Single") },
+                    onToText = { onNavigateToCamera(-1L, "Document") },
                     onImportFiles = { showImportDialog = true },
                     onCollageImages = {
                         val firstDoc = documents.firstOrNull()
@@ -224,7 +244,7 @@ fun HomeScreen(
                         if (searchQuery.isEmpty()) {
                             Spacer(modifier = Modifier.height(24.dp))
                             Button(
-                                onClick = { onNavigateToCamera(-1L, "Single") },
+                                onClick = { onNavigateToCamera(-1L, "Document") },
                                 colors = ButtonDefaults.buttonColors(containerColor = colors.primary)
                             ) {
                                 Icon(Icons.Default.CameraAlt, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -270,6 +290,9 @@ fun HomeScreen(
                                             onNavigateToDetail(doc.id)
                                         }
                                     },
+                                    onLongClick = {
+                                        viewModel.toggleSelectDoc(doc.id)
+                                    },
                                     onDelete = { viewModel.deleteDocument(doc) },
                                     onRename = { docToRename = doc },
                                     onMoveToFolder = { docToMove = doc }
@@ -309,6 +332,9 @@ fun HomeScreen(
                                         } else {
                                             onNavigateToDetail(doc.id)
                                         }
+                                    },
+                                    onLongClick = {
+                                        viewModel.toggleSelectDoc(doc.id)
                                     },
                                     onSelectToggle = { viewModel.toggleSelectDoc(doc.id) },
                                     onDelete = { viewModel.deleteDocument(doc) },
@@ -359,23 +385,101 @@ fun HomeScreen(
         )
     }
 
-    if (showMoveToFolderDialog) {
-        MoveToFolderDialog(
+    if (showMoveCopyDialog) {
+        MoveCopyDialog(
+            selectedDocCount = selectedDocIds.size,
             foldersWithCount = foldersWithCount,
-            onDismiss = { showMoveToFolderDialog = false },
-            onSelectFolderId = { folderId -> viewModel.batchMoveSelected(folderId) }
+            onDismiss = { showMoveCopyDialog = false },
+            onCreateFolder = { name -> viewModel.createFolder(name) },
+            onConfirm = { action, targetFolderId, folderName ->
+                val count = selectedDocIds.size
+                if (action == MoveCopyAction.MOVE) {
+                    viewModel.batchMoveSelected(targetFolderId) {
+                        Toast.makeText(context, "$count document(s) moved to $folderName", Toast.LENGTH_SHORT).show()
+                    }
+                } else {
+                    viewModel.batchCopySelected(targetFolderId) {
+                        Toast.makeText(context, "$count document(s) copied to $folderName", Toast.LENGTH_SHORT).show()
+                    }
+                }
+                showMoveCopyDialog = false
+            }
         )
     }
 
     docToMove?.let { doc ->
-        MoveToFolderDialog(
+        MoveCopyDialog(
+            selectedDocCount = 1,
             foldersWithCount = foldersWithCount,
             onDismiss = { docToMove = null },
-            onSelectFolderId = { folderId ->
-                viewModel.moveDocumentToFolder(doc.id, folderId)
+            onCreateFolder = { name -> viewModel.createFolder(name) },
+            onConfirm = { action, targetFolderId, folderName ->
+                if (action == MoveCopyAction.MOVE) {
+                    viewModel.moveDocumentToFolder(doc.id, targetFolderId)
+                    Toast.makeText(context, "Moved '${doc.title}' to $folderName", Toast.LENGTH_SHORT).show()
+                } else {
+                    viewModel.batchCopySelected(targetFolderId)
+                    Toast.makeText(context, "Copied '${doc.title}' to $folderName", Toast.LENGTH_SHORT).show()
+                }
                 docToMove = null
             }
         )
+    }
+
+    if (showMergeDialog && selectedDocIds.size > 1) {
+        MergeDocumentsDialog(
+            selectedCount = selectedDocIds.size,
+            onDismiss = { showMergeDialog = false },
+            onConfirmMerge = { title, deleteOriginals ->
+                val count = selectedDocIds.size
+                viewModel.mergeSelected(title, deleteOriginals) { newDocId ->
+                    Toast.makeText(context, "$count documents merged into '$title'", Toast.LENGTH_SHORT).show()
+                    onNavigateToDetail(newDocId)
+                }
+                showMergeDialog = false
+            }
+        )
+    }
+
+    if (showMoreMenu) {
+        ModalBottomSheet(
+            onDismissRequest = { showMoreMenu = false },
+            containerColor = Color(0xFF1E1E1E)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(20.dp)
+                    .navigationBarsPadding()
+            ) {
+                Text(
+                    text = "Batch Options (${selectedDocIds.size} selected)",
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp
+                )
+                Spacer(modifier = Modifier.height(14.dp))
+                ListItem(
+                    headlineContent = { Text("Export as PDF", color = Color.White) },
+                    leadingContent = { Icon(Icons.Default.PictureAsPdf, contentDescription = null, tint = colors.primary) },
+                    modifier = Modifier.clickable {
+                        showMoreMenu = false
+                        showBatchPdfDialog = true
+                    },
+                    colors = ListItemDefaults.colors(containerColor = Color.Transparent)
+                )
+                ListItem(
+                    headlineContent = { Text("Deselect All", color = Color.White) },
+                    leadingContent = { Icon(Icons.Default.Close, contentDescription = null, tint = Color.Gray) },
+                    modifier = Modifier.clickable {
+                        showMoreMenu = false
+                        viewModel.clearSelection()
+                    },
+                    colors = ListItemDefaults.colors(containerColor = Color.Transparent)
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+            }
+        }
     }
 
     if (showBatchPdfDialog && selectedDocIds.isNotEmpty()) {

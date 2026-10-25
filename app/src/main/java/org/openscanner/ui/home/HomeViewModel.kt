@@ -180,12 +180,38 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun batchMoveSelected(targetFolderId: Long) {
+    fun batchMoveSelected(targetFolderId: Long, onComplete: (() -> Unit)? = null) {
         val ids = _selectedDocIds.value.toList()
         if (ids.isEmpty()) return
         viewModelScope.launch {
             repository.batchMoveToFolder(ids, targetFolderId)
             clearSelection()
+            onComplete?.invoke()
+        }
+    }
+
+    fun batchCopySelected(targetFolderId: Long, onComplete: (() -> Unit)? = null) {
+        val ids = _selectedDocIds.value.toList()
+        if (ids.isEmpty()) return
+        viewModelScope.launch {
+            repository.batchCopyDocumentsToFolder(ids, targetFolderId)
+            clearSelection()
+            onComplete?.invoke()
+        }
+    }
+
+    fun mergeSelected(
+        mergedTitle: String? = null,
+        deleteOriginals: Boolean = false,
+        onComplete: ((Long) -> Unit)? = null
+    ) {
+        val ids = _selectedDocIds.value.toList()
+        if (ids.size < 2) return
+        viewModelScope.launch {
+            val targetFolderId = _selectedFolder.value?.id ?: -1L
+            val newDocId = repository.mergeDocuments(ids, mergedTitle, targetFolderId, deleteOriginals)
+            clearSelection()
+            onComplete?.invoke(newDocId)
         }
     }
 

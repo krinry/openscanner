@@ -1,9 +1,11 @@
 package org.openscanner.ui.home.components
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -32,12 +34,14 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ScannerDocumentListItem(
     document: Document,
     isSelected: Boolean,
     isSelectMode: Boolean,
     onClick: () -> Unit,
+    onLongClick: () -> Unit = {},
     onSelectToggle: () -> Unit,
     onDelete: () -> Unit,
     onRename: () -> Unit,
@@ -46,10 +50,20 @@ fun ScannerDocumentListItem(
     val colors = ScannerTheme.colors
     val dateFormat = remember { SimpleDateFormat("dd/MM/yy HH:mm", Locale.getDefault()) }
 
+    val rowBg = if (isSelected) Color(0xFF0D251C) else Color.Transparent
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .background(rowBg)
+            .combinedClickable(
+                onClick = {
+                    if (isSelectMode) onSelectToggle() else onClick()
+                },
+                onLongClick = {
+                    onLongClick()
+                }
+            )
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -158,18 +172,18 @@ fun ScannerDocumentListItem(
                     Surface(
                         shape = CircleShape,
                         color = colors.primary,
-                        modifier = Modifier.size(20.dp)
+                        modifier = Modifier.size(22.dp)
                     ) {
                         Box(contentAlignment = Alignment.Center) {
-                            Icon(Icons.Default.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(13.dp))
+                            Icon(Icons.Default.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(14.dp))
                         }
                     }
                 } else {
                     Surface(
                         shape = CircleShape,
                         color = Color.Transparent,
-                        border = BorderStroke(1.5.dp, colors.textSecondary),
-                        modifier = Modifier.size(20.dp)
+                        border = BorderStroke(1.5.dp, Color.White),
+                        modifier = Modifier.size(22.dp)
                     ) {}
                 }
             }

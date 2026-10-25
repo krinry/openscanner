@@ -1,8 +1,10 @@
 package org.openscanner.ui.home.components
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -30,12 +32,14 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ScannerDocumentGridCard(
     document: Document,
     isSelected: Boolean,
     isSelectMode: Boolean,
     onClick: () -> Unit,
+    onLongClick: () -> Unit = {},
     onDelete: () -> Unit,
     onRename: () -> Unit,
     onMoveToFolder: () -> Unit = {}
@@ -46,10 +50,16 @@ fun ScannerDocumentGridCard(
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick),
+            .combinedClickable(
+                onClick = { if (isSelectMode) onLongClick() else onClick() },
+                onLongClick = onLongClick
+            ),
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = colors.surface),
-        border = BorderStroke(0.5.dp, colors.cardBorder)
+        border = BorderStroke(
+            width = if (isSelected) 1.5.dp else 0.5.dp,
+            color = if (isSelected) colors.primary else colors.cardBorder
+        )
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
             Box(

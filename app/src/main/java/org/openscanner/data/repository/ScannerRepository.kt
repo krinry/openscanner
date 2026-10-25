@@ -219,6 +219,93 @@ class ScannerRepository(
         documentDao.batchUpdateFolder(docIds, folderId)
     }
 
+    suspend fun batchCopyDocumentsToFolder(docIds: List<Long>, targetFolderId: Long): List<Long> = withContext(Dispatchers.IO) {
+        docIds.map { copyDocumentToFolder(it, targetFolderId) }
+    }
+
+    suspend fun mergeDocuments(
+        docIds: List<Long>,
+        mergedTitle: String? = null,
+        targetFolderId: Long = -1L,
+        deleteOriginals: Boolean = false
+    ): Long = withContext(Dispatchers.IO) {
+        if (docIds.isEmpty()) return@withContext -1L
+        val now = System.currentTimeMillis()
+        val title = mergedTitle?.trim()?.ifEmpty { null }
+            ?: ("Merged Doc " + SimpleDateFormat("MM-dd-yyyy HH.mm", Locale.getDefault()).format(Date(now)))
+
+        val mergedDoc = Document(
+            title = title,
+            createdTime = now,
+            modifiedTime = now,
+            pageCount = 0,
+            folderId = targetFolderId
+        )
+        val mergedDocId = documentDao.insertDocument(mergedDoc)
+
+        val scansDir = File(context.filesDir, "scans").apply { if (!exists()) mkdirs() }
+        val thumbsDir = File(context.filesDir, "thumbs").apply { if (!exists()) mkdirs() }
+
+        var pageIndexCounter = 0
+        val newPages = mutableListOf<Page>()
+
+        for (docId in docIds) {
+            val pages = pageDao.getPagesListForDocument(docId).sortedBy { it.pageIndex }
+            for (origPage in pages) {
+                val timestamp = now + pageIndexCounter
+                val newProcessed = File(scansDir, "page_${mergedDocId}_${timestamp}.jpg")
+                val newOriginal = File(scansDir, "orig_${mergedDocId}_${timestamp}.jpg")
+                val newThumb = File(thumbsDir, "thumb_${mergedDocId}_${timestamp}.jpg")
+
+                val origProcessedFile = File(origPage.processedImagePath)
+                if (origProcessedFile.exists()) {
+                    origProcessedFile.copyTo(newProcessed, overwrite = true)
+                }
+
+                val origOriginalFile = File(origPage.originalImagePath)
+                if (origOriginalFile.exists()) {
+                    origOriginalFile.copyTo(newOriginal, overwrite = true)
+                } else if (newProcessed.exists()) {
+                    newProcessed.copyTo(newOriginal, overwrite = true)
+                }
+
+                val origThumbFile = File(origPage.thumbnailPath)
+                if (origThumbFile.exists()) {
+                    origThumbFile.copyTo(newThumb, overwrite = true)
+                }
+
+                val newPage = Page(
+                    documentId = mergedDocId,
+                    pageIndex = pageIndexCounter,
+                    processedImagePath = if (newProcessed.exists()) newProcessed.absolutePath else origPage.processedImagePath,
+                    originalImagePath = if (newOriginal.exists()) newOriginal.absolutePath else origPage.originalImagePath,
+                    thumbnailPath = if (newThumb.exists()) newThumb.absolutePath else origPage.thumbnailPath,
+                    cropBorderJson = origPage.cropBorderJson,
+                    enhanceMode = origPage.enhanceMode,
+                    rotationDegrees = origPage.rotationDegrees,
+                    brightness = origPage.brightness,
+                    contrast = origPage.contrast,
+                    ocrText = origPage.ocrText,
+                    watermarkText = origPage.watermarkText,
+                    createdTime = now
+                )
+                newPages.add(newPage)
+                pageIndexCounter++
+            }
+        }
+
+        if (newPages.isNotEmpty()) {
+            pageDao.insertPages(newPages)
+            documentDao.updatePageCount(mergedDocId, newPages.size)
+        }
+
+        if (deleteOriginals) {
+            batchDeleteDocuments(docIds)
+        }
+
+        mergedDocId
+    }
+
     suspend fun batchDeleteDocuments(docIds: List<Long>) = withContext(Dispatchers.IO) {
         for (id in docIds) {
             val pages = pageDao.getPagesListForDocument(id)

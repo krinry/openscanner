@@ -72,16 +72,16 @@ fun HomeTopBar(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(onClick = onClearSelection) {
-                    Icon(Icons.Default.Close, contentDescription = "Close", tint = colors.textPrimary)
+                    Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White)
                 }
                 Text(
-                    text = "$selectedDocCount Selected",
-                    color = colors.textPrimary,
+                    text = "$selectedDocCount selected",
+                    color = Color.White,
                     fontWeight = FontWeight.Bold,
-                    fontSize = 17.sp
+                    fontSize = 18.sp
                 )
                 TextButton(onClick = onSelectAll) {
-                    Text("Select All", color = colors.primary, fontWeight = FontWeight.SemiBold)
+                    Text("Select All", color = colors.primary, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
                 }
             }
         } else {
