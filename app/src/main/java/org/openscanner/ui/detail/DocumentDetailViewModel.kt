@@ -103,12 +103,24 @@ class DocumentDetailViewModel(application: Application) : AndroidViewModel(appli
         }
     }
 
-    fun createCollage(layout: CollageLayout, pageIds: List<Long>, onDone: () -> Unit) {
+    fun createCollage(
+        layout: CollageLayout,
+        pageIds: List<Long>,
+        watermarkConfig: org.openscanner.cv.CollageWatermarkConfig? = null,
+        slotTransforms: Map<Int, org.openscanner.cv.SlotTransform>? = null,
+        onDone: () -> Unit
+    ) {
         val docId = _document.value?.id ?: return
         viewModelScope.launch {
             _isGeneratingPdf.value = true
             try {
-                repository.createCollagePage(docId, pageIds, layout)
+                repository.createCollagePage(
+                    documentId = docId,
+                    pageIds = pageIds,
+                    layout = layout,
+                    watermarkConfig = watermarkConfig,
+                    slotTransforms = slotTransforms
+                )
                 withContext(Dispatchers.Main) {
                     _isGeneratingPdf.value = false
                     onDone()
@@ -122,9 +134,17 @@ class DocumentDetailViewModel(application: Application) : AndroidViewModel(appli
         }
     }
 
-    fun stampSignature(pageId: Long, signatureBitmap: android.graphics.Bitmap, onDone: () -> Unit) {
+    fun stampSignature(
+        pageId: Long,
+        signatureBitmap: android.graphics.Bitmap,
+        relX: Float = 0.55f,
+        relY: Float = 0.75f,
+        relW: Float = 0.35f,
+        relH: Float = -1f,
+        onDone: () -> Unit
+    ) {
         viewModelScope.launch {
-            repository.stampSignatureOnPage(pageId, signatureBitmap)
+            repository.stampSignatureOnPage(pageId, signatureBitmap, relX, relY, relW, relH)
             val docId = _document.value?.id
             if (docId != null) {
                 _document.value = repository.getDocumentById(docId)

@@ -43,7 +43,7 @@ class CollageStressAndEdgeCaseTest {
         assertEquals(49, spacing)
 
         val layouts = CollageLayout.values()
-        assertEquals(6, layouts.size)
+        assertEquals(9, layouts.size)
 
         for (layout in layouts) {
             val slots = CollageGenerator.calculateSlotRects(layout, canvasW, canvasH)

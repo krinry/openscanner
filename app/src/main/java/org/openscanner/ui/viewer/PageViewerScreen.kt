@@ -75,6 +75,7 @@ fun PageViewerScreen(
     }
 
     var showSignatureDialog by remember { mutableStateOf(false) }
+    var viewerSignatureBitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
     var showWatermarkDialog by remember { mutableStateOf(false) }
     var showPasswordDialog by remember { mutableStateOf(false) }
     var showCompressDialog by remember { mutableStateOf(false) }
@@ -164,20 +165,22 @@ fun PageViewerScreen(
             contentAlignment = Alignment.Center
         ) {
             page?.let { p ->
-                AsyncImage(
-                    model = File(p.processedImagePath),
-                    contentDescription = "Page Image",
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .graphicsLayer(
-                            scaleX = scale,
-                            scaleY = scale,
-                            translationX = offset.x,
-                            translationY = offset.y
-                        )
-                        .transformable(state = transformState)
-                )
+                key(imageReloadKey) {
+                    AsyncImage(
+                        model = File(p.processedImagePath),
+                        contentDescription = "Page Image",
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .graphicsLayer(
+                                scaleX = scale,
+                                scaleY = scale,
+                                translationX = offset.x,
+                                translationY = offset.y
+                            )
+                            .transformable(state = transformState)
+                    )
+                }
 
                 // Top-Left Page Counter Badge ("1/9")
                 Surface(
@@ -204,23 +207,36 @@ fun PageViewerScreen(
             onDismiss = { showSignatureDialog = false },
             onSignatureCaptured = { sigBmp ->
                 showSignatureDialog = false
-                val p = page ?: return@SignatureDialog
-                coroutineScope.launch(Dispatchers.IO) {
-                    val app = context.applicationContext as OpenScannerApp
-                    val repo = org.openscanner.data.repository.ScannerRepository(
-                        context = context,
-                        documentDao = app.database.documentDao(),
-                        pageDao = app.database.pageDao(),
-                        folderDao = app.database.folderDao()
-                    )
-                    repo.stampSignatureOnPage(p.id, sigBmp)
-                    withContext(Dispatchers.Main) {
-                        imageReloadKey++
-                        Toast.makeText(context, "Signature applied to page!", Toast.LENGTH_SHORT).show()
-                    }
-                }
+                viewerSignatureBitmap = sigBmp
             }
         )
+    }
+
+    viewerSignatureBitmap?.let { sigBmp ->
+        page?.let { p ->
+            org.openscanner.ui.signature.SignaturePlacementDialog(
+                page = p,
+                signatureBitmap = sigBmp,
+                onDismiss = { viewerSignatureBitmap = null },
+                onStamp = { relX, relY, relW, relH ->
+                    coroutineScope.launch(Dispatchers.IO) {
+                        val app = context.applicationContext as OpenScannerApp
+                        val repo = org.openscanner.data.repository.ScannerRepository(
+                            context = context,
+                            documentDao = app.database.documentDao(),
+                            pageDao = app.database.pageDao(),
+                            folderDao = app.database.folderDao()
+                        )
+                        repo.stampSignatureOnPage(p.id, sigBmp, relX, relY, relW, relH)
+                        withContext(Dispatchers.Main) {
+                            viewerSignatureBitmap = null
+                            imageReloadKey++
+                            Toast.makeText(context, "Signature applied to page!", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }
+            )
+        }
     }
 
     if (showWatermarkDialog) {

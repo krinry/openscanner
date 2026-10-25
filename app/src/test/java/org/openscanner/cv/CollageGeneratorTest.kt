@@ -15,7 +15,7 @@ class CollageGeneratorTest {
     @Test
     fun testCollageLayoutEnumValues() {
         val layouts = CollageLayout.values()
-        assertEquals(6, layouts.size)
+        assertEquals(9, layouts.size)
 
         assertEquals("2-in-1 Vertical", CollageLayout.TWO_VERTICAL.title)
         assertEquals(2, CollageLayout.TWO_VERTICAL.maxPages)
@@ -34,6 +34,15 @@ class CollageGeneratorTest {
 
         assertEquals("6-in-1 Grid", CollageLayout.SIX_GRID.title)
         assertEquals(6, CollageLayout.SIX_GRID.maxPages)
+
+        assertEquals("Driver License", CollageLayout.DRIVER_LICENSE.title)
+        assertEquals(2, CollageLayout.DRIVER_LICENSE.maxPages)
+
+        assertEquals("Passport", CollageLayout.PASSPORT.title)
+        assertEquals(2, CollageLayout.PASSPORT.maxPages)
+
+        assertEquals("Question Book", CollageLayout.QUESTION_BOOK.title)
+        assertEquals(2, CollageLayout.QUESTION_BOOK.maxPages)
     }
 
     @Test

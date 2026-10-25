@@ -9,6 +9,27 @@ import android.graphics.Rect
 import android.graphics.RectF
 
 /**
+ * Transformation parameters for individual collage slot images.
+ */
+data class SlotTransform(
+    val scale: Float = 1.0f,
+    val panX: Float = 0.0f,
+    val panY: Float = 0.0f
+)
+
+/**
+ * Watermark configuration for collage pages.
+ */
+data class CollageWatermarkConfig(
+    val text: String = "CONFIDENTIAL",
+    val color: Int = 0x88888888.toInt(),
+    val fontSizeSp: Float = 36f,
+    val opacity: Float = 0.35f,
+    val rotationAngle: Float = -45f,
+    val isTiled: Boolean = false
+)
+
+/**
  * Supported collage page layouts.
  */
 enum class CollageLayout(val title: String, val maxPages: Int) {
@@ -17,7 +38,10 @@ enum class CollageLayout(val title: String, val maxPages: Int) {
     THREE_VERTICAL("3-in-1 Vertical", 3),
     THREE_TOP_TWO_BOTTOM("3-in-1 (1 Top, 2 Bottom)", 3),
     FOUR_GRID("4-in-1 Grid", 4),
-    SIX_GRID("6-in-1 Grid", 6)
+    SIX_GRID("6-in-1 Grid", 6),
+    DRIVER_LICENSE("Driver License", 2),
+    PASSPORT("Passport", 2),
+    QUESTION_BOOK("Question Book", 2)
 }
 
 /**
@@ -109,6 +133,36 @@ object CollageGenerator {
                     createRect(left, top, left + slotW, top + slotH)
                 }
             }
+            CollageLayout.DRIVER_LICENSE -> {
+                // Two ID-1 landscape cards (1.586:1 aspect ratio) centered vertically
+                val slotH = (contentH - spacing) / 2
+                val maxCardH = (slotH * 0.92f).toInt()
+                val cardW = minOf((contentW * 0.85f).toInt(), Math.round(maxCardH * 1.586f).toInt())
+                val cardH = Math.round(cardW / 1.586f).toInt()
+                val cardLeft = margin + (contentW - cardW) / 2
+                val card1Top = margin + (slotH - cardH) / 2
+                val card2Top = margin + slotH + spacing + (slotH - cardH) / 2
+                listOf(
+                    createRect(cardLeft, card1Top, cardLeft + cardW, card1Top + cardH),
+                    createRect(cardLeft, card2Top, cardLeft + cardW, card2Top + cardH)
+                )
+            }
+            CollageLayout.PASSPORT -> {
+                // Two side-by-side portrait pages with margins
+                val slotW = (contentW - spacing) / 2
+                listOf(
+                    createRect(margin, margin, margin + slotW, margin + contentH),
+                    createRect(margin + slotW + spacing, margin, margin + contentW, margin + contentH)
+                )
+            }
+            CollageLayout.QUESTION_BOOK -> {
+                // Two side-by-side exam columns with gutter
+                val slotW = (contentW - spacing) / 2
+                listOf(
+                    createRect(margin, margin, margin + slotW, margin + contentH),
+                    createRect(margin + slotW + spacing, margin, margin + contentW, margin + contentH)
+                )
+            }
         }
     }
 
@@ -130,7 +184,9 @@ object CollageGenerator {
         layout: CollageLayout,
         canvasWidth: Int = A4_WIDTH_300DPI,
         canvasHeight: Int = A4_HEIGHT_300DPI,
-        drawBorders: Boolean = true
+        drawBorders: Boolean = true,
+        watermarkConfig: CollageWatermarkConfig? = null,
+        slotTransforms: Map<Int, SlotTransform>? = null
     ): Bitmap {
         val result = Bitmap.createBitmap(canvasWidth, canvasHeight, Bitmap.Config.ARGB_8888).apply {
             density = 300
@@ -152,7 +208,11 @@ object CollageGenerator {
 
         val count = minOf(layout.maxPages, minOf(slots.size, bitmaps.size))
         for (i in 0 until count) {
-            drawBitmapFitted(canvas, bitmaps[i], slots[i], borderPaint, bitmapPaint)
+            drawBitmapFitted(canvas, bitmaps[i], slots[i], borderPaint, bitmapPaint, slotTransforms?.get(i))
+        }
+
+        if (watermarkConfig != null && watermarkConfig.text.isNotBlank()) {
+            drawWatermarkOnCanvas(canvas, canvasWidth, canvasHeight, watermarkConfig)
         }
 
         return result
@@ -168,7 +228,9 @@ object CollageGenerator {
         layout: CollageLayout,
         canvasWidth: Int = A4_WIDTH_300DPI,
         canvasHeight: Int = A4_HEIGHT_300DPI,
-        drawBorders: Boolean = true
+        drawBorders: Boolean = true,
+        watermarkConfig: CollageWatermarkConfig? = null,
+        slotTransforms: Map<Int, SlotTransform>? = null
     ): Bitmap {
         val result = Bitmap.createBitmap(canvasWidth, canvasHeight, Bitmap.Config.ARGB_8888).apply {
             density = 300
@@ -196,11 +258,15 @@ object CollageGenerator {
             val bmp = decodeSampledBitmap(filePaths[i], slotW, slotH)
             if (bmp != null) {
                 try {
-                    drawBitmapFitted(canvas, bmp, slotRect, borderPaint, bitmapPaint)
+                    drawBitmapFitted(canvas, bmp, slotRect, borderPaint, bitmapPaint, slotTransforms?.get(i))
                 } finally {
                     bmp.recycle()
                 }
             }
+        }
+
+        if (watermarkConfig != null && watermarkConfig.text.isNotBlank()) {
+            drawWatermarkOnCanvas(canvas, canvasWidth, canvasHeight, watermarkConfig)
         }
 
         return result
@@ -259,7 +325,8 @@ object CollageGenerator {
         bitmap: Bitmap,
         slotRect: Rect,
         borderPaint: Paint? = null,
-        bitmapPaint: Paint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
+        bitmapPaint: Paint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG),
+        transform: SlotTransform? = null
     ) {
         if (bitmap.isRecycled || bitmap.width <= 0 || bitmap.height <= 0) return
 
@@ -270,17 +337,67 @@ object CollageGenerator {
 
         if (slotW <= 0f || slotH <= 0f) return
 
-        val scale = minOf(slotW / bmpW, slotH / bmpH)
+        val baseScale = minOf(slotW / bmpW, slotH / bmpH)
+        val userScale = (transform?.scale ?: 1.0f).coerceIn(0.5f, 4.0f)
+        val scale = baseScale * userScale
         val drawW = bmpW * scale
         val drawH = bmpH * scale
 
-        val drawLeft = slotRect.left + (slotW - drawW) / 2f
-        val drawTop = slotRect.top + (slotH - drawH) / 2f
+        // Pan normalized to slot dimensions
+        val panX = (transform?.panX ?: 0f) * (slotW / 300f)
+        val panY = (transform?.panY ?: 0f) * (slotH / 300f)
+
+        val drawLeft = slotRect.left + (slotW - drawW) / 2f + panX
+        val drawTop = slotRect.top + (slotH - drawH) / 2f + panY
         val destRect = RectF(drawLeft, drawTop, drawLeft + drawW, drawTop + drawH)
 
+        canvas.save()
+        canvas.clipRect(slotRect)
         canvas.drawBitmap(bitmap, null, destRect, bitmapPaint)
         if (borderPaint != null) {
             canvas.drawRect(destRect, borderPaint)
+        }
+        canvas.restore()
+    }
+
+    /**
+     * Draws watermark text across the collage canvas.
+     */
+    fun drawWatermarkOnCanvas(
+        canvas: Canvas,
+        canvasWidth: Int,
+        canvasHeight: Int,
+        config: CollageWatermarkConfig
+    ) {
+        if (config.text.isBlank()) return
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = config.color
+            alpha = (config.opacity * 255).toInt().coerceIn(0, 255)
+            textSize = config.fontSizeSp * (canvasWidth / 400f)
+            textAlign = Paint.Align.CENTER
+            isFakeBoldText = true
+        }
+
+        if (config.isTiled) {
+            val stepX = canvasWidth / 3f
+            val stepY = canvasHeight / 5f
+            for (y in 0..5) {
+                for (x in 0..3) {
+                    val px = x * stepX + (if (y % 2 == 1) stepX / 2f else 0f)
+                    val py = y * stepY
+                    canvas.save()
+                    canvas.rotate(config.rotationAngle, px, py)
+                    canvas.drawText(config.text, px, py, paint)
+                    canvas.restore()
+                }
+            }
+        } else {
+            val cx = canvasWidth / 2f
+            val cy = canvasHeight / 2f
+            canvas.save()
+            canvas.rotate(config.rotationAngle, cx, cy)
+            canvas.drawText(config.text, cx, cy, paint)
+            canvas.restore()
         }
     }
 

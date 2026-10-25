@@ -72,6 +72,7 @@ fun DocumentDetailScreen(
     var showRenameDialog by remember { mutableStateOf(false) }
     var showDeleteConfirmDialog by remember { mutableStateOf(false) }
     var showSignatureDialog by remember { mutableStateOf(false) }
+    var capturedSignatureBitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
     var showCollageDialog by remember { mutableStateOf(false) }
     var showMoveFolderDialog by remember { mutableStateOf(false) }
     var showShareExportSheet by remember { mutableStateOf(false) }
@@ -350,8 +351,8 @@ fun DocumentDetailScreen(
         CollageStudioDialog(
             pages = pages,
             onDismiss = { showCollageDialog = false },
-            onGenerateCollage = { layout, pageIds ->
-                viewModel.createCollage(layout, pageIds) {
+            onGenerateCollage = { layout, pageIds, watermarkConfig, transforms ->
+                viewModel.createCollage(layout, pageIds, watermarkConfig, transforms) {
                     showCollageDialog = false
                     Toast.makeText(context, "Collage page generated!", Toast.LENGTH_SHORT).show()
                 }
@@ -362,11 +363,31 @@ fun DocumentDetailScreen(
     if (showSignatureDialog) {
         SignatureDialog(
             onDismiss = { showSignatureDialog = false },
-            onSignatureCaptured = { _ ->
+            onSignatureCaptured = { bmp ->
                 showSignatureDialog = false
-                Toast.makeText(context, "Signature saved to document!", Toast.LENGTH_SHORT).show()
+                capturedSignatureBitmap = bmp
             }
         )
+    }
+
+    capturedSignatureBitmap?.let { sigBmp ->
+        val targetPage = pages.firstOrNull()
+        if (targetPage != null) {
+            org.openscanner.ui.signature.SignaturePlacementDialog(
+                page = targetPage,
+                signatureBitmap = sigBmp,
+                onDismiss = { capturedSignatureBitmap = null },
+                onStamp = { relX, relY, relW, relH ->
+                    viewModel.stampSignature(targetPage.id, sigBmp, relX, relY, relW, relH) {
+                        capturedSignatureBitmap = null
+                        Toast.makeText(context, "Signature applied to page!", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            )
+        } else {
+            Toast.makeText(context, "No pages available to sign", Toast.LENGTH_SHORT).show()
+            capturedSignatureBitmap = null
+        }
     }
 
     if (showShareExportSheet) {

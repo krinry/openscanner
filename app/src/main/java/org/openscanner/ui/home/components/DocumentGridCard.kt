@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.DriveFileMove
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
@@ -36,7 +37,8 @@ fun ScannerDocumentGridCard(
     isSelectMode: Boolean,
     onClick: () -> Unit,
     onDelete: () -> Unit,
-    onRename: () -> Unit
+    onRename: () -> Unit,
+    onMoveToFolder: () -> Unit = {}
 ) {
     val colors = ScannerTheme.colors
     val dateFormat = remember { SimpleDateFormat("dd/MM/yy", Locale.getDefault()) }
@@ -149,6 +151,20 @@ fun ScannerDocumentGridCard(
                             onDismissRequest = { gridDocMenuExpanded = false },
                             modifier = Modifier.background(colors.surface)
                         ) {
+                            DropdownMenuItem(
+                                text = { Text("Move to Folder", color = colors.textPrimary) },
+                                onClick = {
+                                    gridDocMenuExpanded = false
+                                    onMoveToFolder()
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.AutoMirrored.Outlined.DriveFileMove,
+                                        contentDescription = "Move to Folder",
+                                        tint = colors.textSecondary
+                                    )
+                                }
+                            )
                             DropdownMenuItem(
                                 text = { Text("Rename", color = colors.textPrimary) },
                                 onClick = {

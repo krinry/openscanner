@@ -29,90 +29,101 @@ fun HomeBottomBar(
 ) {
     val colors = ScannerTheme.colors
 
-    Surface(
-        color = colors.surface,
+    Box(
         modifier = Modifier.fillMaxWidth(),
-        tonalElevation = 6.dp
+        contentAlignment = Alignment.BottomCenter
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .navigationBarsPadding()
-                .height(68.dp)
+        Surface(
+            color = colors.surface,
+            modifier = Modifier.fillMaxWidth(),
+            tonalElevation = 6.dp,
+            shadowElevation = 4.dp
         ) {
-            // Left & Right Tabs Row
-            Row(
+            Box(
                 modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 24.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+                    .height(64.dp)
             ) {
-                // Documents Tab
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
+                // Left & Right Tabs Row
+                Row(
                     modifier = Modifier
-                        .clickable { onTabSelected(0) }
-                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                        .fillMaxSize()
+                        .padding(horizontal = 24.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Icon(
-                        imageVector = if (selectedTab == 0) Icons.Filled.Description else Icons.Outlined.Description,
-                        contentDescription = "Documents",
-                        tint = if (selectedTab == 0) colors.primary else colors.textSecondary,
-                        modifier = Modifier.size(24.dp)
-                    )
-                    Spacer(modifier = Modifier.height(3.dp))
-                    Text(
-                        text = "Documents",
-                        color = if (selectedTab == 0) colors.primary else colors.textSecondary,
-                        fontSize = 11.sp,
-                        fontWeight = if (selectedTab == 0) FontWeight.Bold else FontWeight.Normal
-                    )
-                }
+                    // Documents Tab
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier
+                            .clickable { onTabSelected(0) }
+                            .padding(horizontal = 16.dp, vertical = 6.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (selectedTab == 0) Icons.Filled.Description else Icons.Outlined.Description,
+                            contentDescription = "Documents",
+                            tint = if (selectedTab == 0) colors.primary else colors.textSecondary,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.height(3.dp))
+                        Text(
+                            text = "Documents",
+                            color = if (selectedTab == 0) colors.primary else colors.textSecondary,
+                            fontSize = 11.sp,
+                            fontWeight = if (selectedTab == 0) FontWeight.Bold else FontWeight.Normal
+                        )
+                    }
 
-                Spacer(modifier = Modifier.width(64.dp)) // Space for center FAB
+                    Spacer(modifier = Modifier.width(64.dp)) // Space for center FAB
 
-                // Tools Tab
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier
-                        .clickable { onTabSelected(1) }
-                        .padding(horizontal = 16.dp, vertical = 6.dp)
-                ) {
-                    Icon(
-                        imageVector = if (selectedTab == 1) Icons.Filled.Handyman else Icons.Outlined.Handyman,
-                        contentDescription = "Tools",
-                        tint = if (selectedTab == 1) colors.primary else colors.textSecondary,
-                        modifier = Modifier.size(24.dp)
-                    )
-                    Spacer(modifier = Modifier.height(3.dp))
-                    Text(
-                        text = "Tools",
-                        color = if (selectedTab == 1) colors.primary else colors.textSecondary,
-                        fontSize = 11.sp,
-                        fontWeight = if (selectedTab == 1) FontWeight.Bold else FontWeight.Normal
-                    )
+                    // Tools Tab
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier
+                            .clickable { onTabSelected(1) }
+                            .padding(horizontal = 16.dp, vertical = 6.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (selectedTab == 1) Icons.Filled.Handyman else Icons.Outlined.Handyman,
+                            contentDescription = "Tools",
+                            tint = if (selectedTab == 1) colors.primary else colors.textSecondary,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.height(3.dp))
+                        Text(
+                            text = "Tools",
+                            color = if (selectedTab == 1) colors.primary else colors.textSecondary,
+                            fontSize = 11.sp,
+                            fontWeight = if (selectedTab == 1) FontWeight.Bold else FontWeight.Normal
+                        )
+                    }
                 }
             }
+        }
 
-            // Signature Centered Emerald Shutter FAB
-            FloatingActionButton(
-                onClick = onCameraClick,
-                shape = CircleShape,
-                containerColor = colors.primary,
-                contentColor = Color.White,
-                modifier = Modifier
-                    .align(Alignment.Center)
-                    .offset(y = (-14).dp)
-                    .size(60.dp)
-                    .shadow(10.dp, CircleShape)
-            ) {
-                Icon(
-                    Icons.Default.CameraAlt,
-                    contentDescription = "Scan Document",
-                    modifier = Modifier.size(28.dp)
-                )
-            }
+        // Signature Centered Emerald Shutter FAB with unclipped elevation
+        FloatingActionButton(
+            onClick = onCameraClick,
+            shape = CircleShape,
+            containerColor = colors.primary,
+            contentColor = Color.White,
+            elevation = FloatingActionButtonDefaults.elevation(
+                defaultElevation = 8.dp,
+                pressedElevation = 12.dp,
+                focusedElevation = 8.dp,
+                hoveredElevation = 8.dp
+            ),
+            modifier = Modifier
+                .navigationBarsPadding()
+                .padding(bottom = 18.dp)
+                .size(60.dp)
+        ) {
+            Icon(
+                Icons.Default.CameraAlt,
+                contentDescription = "Scan Document",
+                modifier = Modifier.size(28.dp)
+            )
         }
     }
 }

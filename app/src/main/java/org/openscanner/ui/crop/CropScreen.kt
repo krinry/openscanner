@@ -41,14 +41,18 @@ import java.io.File
 @Composable
 fun CropScreen(
     imagePath: String,
-    docId: Long,
-    onNavigateToFilter: (imagePath: String, docId: Long, borderJson: String) -> Unit,
+    docId: Long = -1L,
+    initialQuad: DocumentQuadrilateral? = null,
+    rotationDegrees: Int = 0,
+    onCropConfirmed: ((DocumentQuadrilateral) -> Unit)? = null,
+    onNavigateToFilter: ((imagePath: String, docId: Long, borderJson: String) -> Unit)? = null,
     onClose: () -> Unit
 ) {
     val coroutineScope = rememberCoroutineScope()
     var bitmap by remember { mutableStateOf<Bitmap?>(null) }
     var quad by remember { mutableStateOf<DocumentQuadrilateral?>(null) }
     var activeTouchPoint by remember { mutableStateOf<Offset?>(null) }
+    var activeHandlePoint by remember { mutableStateOf<Offset?>(null) }
     var viewWidth by remember { mutableStateOf(1f) }
     var viewHeight by remember { mutableStateOf(1f) }
 
@@ -91,7 +95,7 @@ fun CropScreen(
     }
 
     // Decode sample bitmap for high performance
-    LaunchedEffect(imagePath) {
+    LaunchedEffect(imagePath, rotationDegrees) {
         withContext(Dispatchers.IO) {
             val file = File(imagePath)
             if (file.exists()) {
@@ -105,7 +109,13 @@ fun CropScreen(
                     inSampleSize = sampleSize
                     inPreferredConfig = Bitmap.Config.ARGB_8888
                 }
-                bitmap = BitmapFactory.decodeFile(file.absolutePath, decodeOpts)
+                val decoded = BitmapFactory.decodeFile(file.absolutePath, decodeOpts)
+                if (decoded != null && rotationDegrees != 0) {
+                    val m = Matrix().apply { postRotate(rotationDegrees.toFloat()) }
+                    bitmap = Bitmap.createBitmap(decoded, 0, 0, decoded.width, decoded.height, m, true)
+                } else {
+                    bitmap = decoded
+                }
             }
         }
     }
@@ -122,8 +132,8 @@ fun CropScreen(
             val file = File(imagePath)
             val originalOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeFile(file.absolutePath, originalOpts)
-            val origW = originalOpts.outWidth.toFloat()
-            val origH = originalOpts.outHeight.toFloat()
+            val origW = if (rotationDegrees % 180 == 0) originalOpts.outWidth.toFloat() else originalOpts.outHeight.toFloat()
+            val origH = if (rotationDegrees % 180 == 0) originalOpts.outHeight.toFloat() else originalOpts.outWidth.toFloat()
 
             fun mapPoint(pt: PointF): PointF {
                 val nx = ((pt.x - fitRect.left) / renderW).coerceIn(0f, 1f)
@@ -138,12 +148,17 @@ fun CropScreen(
                 bottomLeft = mapPoint(q.bottomLeft)
             )
 
-            val borderStr = "${realQuad.topLeft.x},${realQuad.topLeft.y}," +
-                    "${realQuad.topRight.x},${realQuad.topRight.y}," +
-                    "${realQuad.bottomRight.x},${realQuad.bottomRight.y}," +
-                    "${realQuad.bottomLeft.x},${realQuad.bottomLeft.y}"
+            if (onCropConfirmed != null) {
+                onCropConfirmed(realQuad)
+                onClose()
+            } else if (onNavigateToFilter != null) {
+                val borderStr = "${realQuad.topLeft.x},${realQuad.topLeft.y}," +
+                        "${realQuad.topRight.x},${realQuad.topRight.y}," +
+                        "${realQuad.bottomRight.x},${realQuad.bottomRight.y}," +
+                        "${realQuad.bottomLeft.x},${realQuad.bottomLeft.y}"
 
-            onNavigateToFilter(imagePath, docId, borderStr)
+                onNavigateToFilter(imagePath, docId, borderStr)
+            }
         }
     }
 
@@ -257,7 +272,11 @@ fun CropScreen(
                             viewHeight = coordinates.size.height.toFloat()
                             if (quad == null) {
                                 val r = calculateImageFit(viewWidth, viewHeight, bmp.width, bmp.height)
-                                autoDetectCorners(bmp, r)
+                                if (initialQuad != null) {
+                                    quad = mapDetectedQuadToScreen(initialQuad, r, bmp.width, bmp.height)
+                                } else {
+                                    autoDetectCorners(bmp, r)
+                                }
                             }
                         }
                 ) {
@@ -275,12 +294,17 @@ fun CropScreen(
                             quad = currentQuad,
                             boundsRect = fitRect,
                             onQuadChanged = { quad = it },
-                            onTouchPoint = { activeTouchPoint = it }
+                            onTouchPoint = { activeTouchPoint = it },
+                            onHandleActive = { hPt, tPt ->
+                                activeHandlePoint = hPt
+                                activeTouchPoint = tPt
+                            }
                         )
 
                         MagnifierLoupe(
                             bitmap = bmp,
                             touchPoint = activeTouchPoint,
+                            handlePoint = activeHandlePoint,
                             imageScale = fitRect.width() / bmp.width.toFloat(),
                             fitRect = fitRect
                         )

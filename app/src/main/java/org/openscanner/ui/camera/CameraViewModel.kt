@@ -18,6 +18,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.openscanner.camera.CaptureMode
 import org.openscanner.cv.DocumentQuadrilateral
+import org.openscanner.cv.PointF
 import java.io.File
 import java.io.FileOutputStream
 
@@ -51,10 +52,26 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun setMode(mode: CaptureMode) {
         _currentMode.value = mode
+        _detectedQuad.value = null
     }
 
     fun onDocumentDetected(quad: DocumentQuadrilateral, width: Int, height: Int) {
-        _detectedQuad.value = quad
+        val prev = _detectedQuad.value
+        val smoothed = if (prev == null || _previewDimens.value != Pair(width, height)) {
+            quad
+        } else {
+            val alpha = 0.35f
+            fun lerp(p1: PointF, p2: PointF): PointF =
+                PointF(p1.x + alpha * (p2.x - p1.x), p1.y + alpha * (p2.y - p1.y))
+
+            DocumentQuadrilateral(
+                topLeft = lerp(prev.topLeft, quad.topLeft),
+                topRight = lerp(prev.topRight, quad.topRight),
+                bottomRight = lerp(prev.bottomRight, quad.bottomRight),
+                bottomLeft = lerp(prev.bottomLeft, quad.bottomLeft)
+            )
+        }
+        _detectedQuad.value = smoothed
         _previewDimens.value = Pair(width, height)
     }
 

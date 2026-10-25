@@ -52,6 +52,7 @@ fun HomeScreen(
     var showNewFolderDialog by remember { mutableStateOf(false) }
     var folderToRename by remember { mutableStateOf<Folder?>(null) }
     var docToRename by remember { mutableStateOf<Document?>(null) }
+    var docToMove by remember { mutableStateOf<Document?>(null) }
     var showMoveToFolderDialog by remember { mutableStateOf(false) }
     var showBatchPdfDialog by remember { mutableStateOf(false) }
     var isImporting by remember { mutableStateOf(false) }
@@ -235,7 +236,8 @@ fun HomeScreen(
                                         }
                                     },
                                     onDelete = { viewModel.deleteDocument(doc) },
-                                    onRename = { docToRename = doc }
+                                    onRename = { docToRename = doc },
+                                    onMoveToFolder = { docToMove = doc }
                                 )
                             }
                         }
@@ -275,7 +277,8 @@ fun HomeScreen(
                                     },
                                     onSelectToggle = { viewModel.toggleSelectDoc(doc.id) },
                                     onDelete = { viewModel.deleteDocument(doc) },
-                                    onRename = { docToRename = doc }
+                                    onRename = { docToRename = doc },
+                                    onMoveToFolder = { docToMove = doc }
                                 )
                             }
                         }
@@ -326,6 +329,17 @@ fun HomeScreen(
             foldersWithCount = foldersWithCount,
             onDismiss = { showMoveToFolderDialog = false },
             onSelectFolderId = { folderId -> viewModel.batchMoveSelected(folderId) }
+        )
+    }
+
+    docToMove?.let { doc ->
+        MoveToFolderDialog(
+            foldersWithCount = foldersWithCount,
+            onDismiss = { docToMove = null },
+            onSelectFolderId = { folderId ->
+                viewModel.moveDocumentToFolder(doc.id, folderId)
+                docToMove = null
+            }
         )
     }
 

@@ -18,10 +18,10 @@ struct Point2D {
 };
 
 struct Quad {
-    Point2D tl;
-    Point2D tr;
-    Point2D br;
-    Point2D bl;
+    union { Point2D tl; Point2D topLeft; };
+    union { Point2D tr; Point2D topRight; };
+    union { Point2D br; Point2D bottomRight; };
+    union { Point2D bl; Point2D bottomLeft; };
 };
 
 // C++ Algorithm prototypes for document processing pipeline

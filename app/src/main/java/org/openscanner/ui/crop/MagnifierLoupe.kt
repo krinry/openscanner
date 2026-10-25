@@ -12,10 +12,16 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.graphics.drawscope.scale
+import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import org.openscanner.ui.theme.ScannerGreen
 
@@ -25,21 +31,29 @@ fun MagnifierLoupe(
     touchPoint: Offset?,
     imageScale: Float,
     fitRect: android.graphics.RectF? = null,
+    handlePoint: Offset? = null,
     modifier: Modifier = Modifier
 ) {
-    if (touchPoint == null || bitmap == null || imageScale <= 0f) return
+    val activeTarget = handlePoint ?: touchPoint
+    if (activeTarget == null || bitmap == null || imageScale <= 0f) return
 
     val imageBitmap = remember(bitmap) { bitmap.asImageBitmap() }
-    val loupeSize = 110.dp
-    val zoomFactor = 2.0f
+    val density = LocalDensity.current
+    val config = LocalConfiguration.current
 
-    // Position loupe above the finger, flipping below if near top
-    val loupeSizePx = 300f
-    val posX = (touchPoint.x - loupeSizePx / 2f).toInt().coerceAtLeast(16)
-    val posY = if (touchPoint.y > 350f) {
-        (touchPoint.y - 280f).toInt()
+    val loupeSize = 120.dp
+    val zoomFactor = 2.2f
+
+    val loupeSizePx = with(density) { loupeSize.toPx() }
+    val screenWidthPx = with(density) { config.screenWidthDp.dp.toPx() }
+
+    // Position loupe comfortably above the finger contact point
+    val anchorTouch = touchPoint ?: activeTarget
+    val posX = (anchorTouch.x - loupeSizePx / 2f).coerceIn(16f, (screenWidthPx - loupeSizePx - 16f).coerceAtLeast(16f)).toInt()
+    val posY = if (anchorTouch.y > loupeSizePx + 80f) {
+        (anchorTouch.y - loupeSizePx - 50f).toInt()
     } else {
-        (touchPoint.y + 70f).toInt()
+        (anchorTouch.y + 70f).toInt()
     }
 
     Box(
@@ -50,34 +64,43 @@ fun MagnifierLoupe(
             .border(3.dp, ScannerGreen, CircleShape)
     ) {
         Canvas(modifier = Modifier.size(loupeSize)) {
-            val offX = fitRect?.left ?: 0f
-            val offY = fitRect?.top ?: 0f
-            val bmpX = ((touchPoint.x - offX) / imageScale)
-            val bmpY = ((touchPoint.y - offY) / imageScale)
+            // Circular aperture clip
+            clipPath(Path().apply { addOval(Rect(Offset.Zero, size)) }) {
+                drawRect(Color(0xFF141414))
 
-            val loupeRadiusPx = size.width / 2f
-            val sampleRadius = (loupeRadiusPx / zoomFactor).toInt()
+                val offX = fitRect?.left ?: 0f
+                val offY = fitRect?.top ?: 0f
 
-            val srcLeft = (bmpX - sampleRadius).toInt().coerceIn(0, bitmap.width)
-            val srcTop = (bmpY - sampleRadius).toInt().coerceIn(0, bitmap.height)
-            val srcW = (sampleRadius * 2).coerceAtMost(bitmap.width - srcLeft)
-            val srcH = (sampleRadius * 2).coerceAtMost(bitmap.height - srcTop)
-
-            if (srcW > 0 && srcH > 0) {
-                // Zero-allocation subregion drawing
-                drawImage(
-                    image = imageBitmap,
-                    srcOffset = IntOffset(srcLeft, srcTop),
-                    srcSize = IntSize(srcW, srcH),
-                    dstOffset = IntOffset.Zero,
-                    dstSize = IntSize(size.width.toInt(), size.height.toInt())
-                )
+                // Center exactly on activeTarget (handle/vertex coordinates)
+                translate(
+                    left = size.width / 2f - (activeTarget.x - offX) * zoomFactor,
+                    top = size.height / 2f - (activeTarget.y - offY) * zoomFactor
+                ) {
+                    scale(
+                        scaleX = zoomFactor * imageScale,
+                        scaleY = zoomFactor * imageScale,
+                        pivot = Offset.Zero
+                    ) {
+                        drawImage(image = imageBitmap)
+                    }
+                }
             }
 
-            // Draw center crosshair
+            // High-precision targeting reticle exactly at center of loupe
             val c = Offset(size.width / 2f, size.height / 2f)
-            drawLine(ScannerGreen, Offset(c.x - 16f, c.y), Offset(c.x + 16f, c.y), strokeWidth = 2.5f)
-            drawLine(ScannerGreen, Offset(c.x, c.y - 16f), Offset(c.x, c.y + 16f), strokeWidth = 2.5f)
+            // Outer shadow / glow
+            drawLine(Color.Black.copy(alpha = 0.5f), Offset(c.x - 22f, c.y), Offset(c.x + 22f, c.y), strokeWidth = 4f)
+            drawLine(Color.Black.copy(alpha = 0.5f), Offset(c.x, c.y - 22f), Offset(c.x, c.y + 22f), strokeWidth = 4f)
+
+            // Primary crosshairs
+            drawLine(Color.White, Offset(c.x - 20f, c.y), Offset(c.x + 20f, c.y), strokeWidth = 2.5f)
+            drawLine(Color.White, Offset(c.x, c.y - 20f), Offset(c.x, c.y + 20f), strokeWidth = 2.5f)
+            drawLine(ScannerGreen, Offset(c.x - 14f, c.y), Offset(c.x + 14f, c.y), strokeWidth = 1.5f)
+            drawLine(ScannerGreen, Offset(c.x, c.y - 14f), Offset(c.x, c.y + 14f), strokeWidth = 1.5f)
+
+            // Center micro-dot
+            drawCircle(Color.White, radius = 3.5f, center = c)
+            drawCircle(ScannerGreen, radius = 2f, center = c)
         }
     }
 }

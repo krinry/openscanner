@@ -15,6 +15,7 @@ import androidx.compose.material.icons.automirrored.filled.RotateLeft
 import androidx.compose.material.icons.automirrored.filled.RotateRight
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.outlined.AutoFixHigh
+import androidx.compose.material.icons.outlined.Crop
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -59,6 +60,7 @@ fun BatchReviewScreen(
     var processingProgress by remember { mutableStateOf(0 to batchQueue.size) }
     var selectedFilter by remember { mutableStateOf(EnhanceMode.MAGIC_COLOR) }
     var showFilterMenu by remember { mutableStateOf(false) }
+    var cropEditingItem by remember { mutableStateOf<BatchCaptureItem?>(null) }
 
     val currentItem = batchQueue.getOrNull(pagerState.currentPage)
 
@@ -182,6 +184,14 @@ fun BatchReviewScreen(
                     )
 
                     ReviewActionButton(
+                        icon = Icons.Outlined.Crop,
+                        label = "Crop",
+                        onClick = {
+                            cropEditingItem = currentItem
+                        }
+                    )
+
+                    ReviewActionButton(
                         icon = Icons.Outlined.AutoFixHigh,
                         label = selectedFilter.displayName,
                         onClick = { showFilterMenu = true }
@@ -290,6 +300,27 @@ fun BatchReviewScreen(
                     }
                 }
             }
+        }
+    }
+
+    // Modal Crop Screen for Batch Item
+    cropEditingItem?.let { item ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+        ) {
+            org.openscanner.ui.crop.CropScreen(
+                imagePath = item.rawFilePath,
+                docId = docId,
+                initialQuad = item.cropQuad,
+                rotationDegrees = item.rotationDegrees,
+                onCropConfirmed = { newQuad ->
+                    onUpdateCropQuad(item.id, newQuad)
+                    cropEditingItem = null
+                },
+                onClose = { cropEditingItem = null }
+            )
         }
     }
 }

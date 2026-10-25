@@ -22,13 +22,15 @@ fun DraggablePolygonOverlay(
     quad: DocumentQuadrilateral,
     boundsRect: RectF,
     onQuadChanged: (DocumentQuadrilateral) -> Unit,
-    onTouchPoint: (Offset?) -> Unit,
+    onTouchPoint: (Offset?) -> Unit = {},
+    onHandleActive: (handlePoint: Offset?, touchPoint: Offset?) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
     val currentQuad by rememberUpdatedState(quad)
     val currentBounds by rememberUpdatedState(boundsRect)
     val currentOnQuadChanged by rememberUpdatedState(onQuadChanged)
     val currentOnTouchPoint by rememberUpdatedState(onTouchPoint)
+    val currentOnHandleActive by rememberUpdatedState(onHandleActive)
 
     var activeHandleIndex by remember { mutableIntStateOf(-1) }
 
@@ -59,7 +61,9 @@ fun DraggablePolygonOverlay(
 
                         if (closest != null) {
                             activeHandleIndex = closest.first
+                            val handlePos = handles[closest.first]
                             currentOnTouchPoint(offset)
+                            currentOnHandleActive(handlePos, offset)
                         } else {
                             // Check if touch is inside the quadrilateral (to drag entire crop area)
                             val poly = listOf(p1, p2, p3, p4)
@@ -79,15 +83,13 @@ fun DraggablePolygonOverlay(
                             } else {
                                 activeHandleIndex = -1
                             }
+                            currentOnTouchPoint(null)
+                            currentOnHandleActive(null, null)
                         }
                     },
                     onDrag = { change, dragAmount ->
                         change.consume()
                         if (activeHandleIndex == -1) return@detectDragGestures
-
-                        if (activeHandleIndex < 8) {
-                            currentOnTouchPoint(change.position)
-                        }
 
                         val q = currentQuad
                         val b = currentBounds
@@ -105,23 +107,23 @@ fun DraggablePolygonOverlay(
                             1 -> q.copy(topRight = clampPt(q.topRight.x + dx, q.topRight.y + dy))
                             2 -> q.copy(bottomRight = clampPt(q.bottomRight.x + dx, q.bottomRight.y + dy))
                             3 -> q.copy(bottomLeft = clampPt(q.bottomLeft.x + dx, q.bottomLeft.y + dy))
-                            4 -> q.copy( // Top Edge (move both top handles)
+                            4 -> q.copy(
                                 topLeft = clampPt(q.topLeft.x + dx, q.topLeft.y + dy),
                                 topRight = clampPt(q.topRight.x + dx, q.topRight.y + dy)
                             )
-                            5 -> q.copy( // Right Edge (move both right handles)
+                            5 -> q.copy(
                                 topRight = clampPt(q.topRight.x + dx, q.topRight.y + dy),
                                 bottomRight = clampPt(q.bottomRight.x + dx, q.bottomRight.y + dy)
                             )
-                            6 -> q.copy( // Bottom Edge (move both bottom handles)
+                            6 -> q.copy(
                                 bottomLeft = clampPt(q.bottomLeft.x + dx, q.bottomLeft.y + dy),
                                 bottomRight = clampPt(q.bottomRight.x + dx, q.bottomRight.y + dy)
                             )
-                            7 -> q.copy( // Left Edge (move both left handles)
+                            7 -> q.copy(
                                 topLeft = clampPt(q.topLeft.x + dx, q.topLeft.y + dy),
                                 bottomLeft = clampPt(q.bottomLeft.x + dx, q.bottomLeft.y + dy)
                             )
-                            8 -> { // Move entire quadrilateral together
+                            8 -> {
                                 val minX = minOf(q.topLeft.x, q.bottomLeft.x)
                                 val maxX = maxOf(q.topRight.x, q.bottomRight.x)
                                 val minY = minOf(q.topLeft.y, q.topRight.y)
@@ -148,15 +150,46 @@ fun DraggablePolygonOverlay(
                             }
                             else -> q
                         }
+
                         currentOnQuadChanged(newQuad)
+
+                        if (activeHandleIndex < 8) {
+                            val np1 = Offset(newQuad.topLeft.x, newQuad.topLeft.y)
+                            val np2 = Offset(newQuad.topRight.x, newQuad.topRight.y)
+                            val np3 = Offset(newQuad.bottomRight.x, newQuad.bottomRight.y)
+                            val np4 = Offset(newQuad.bottomLeft.x, newQuad.bottomLeft.y)
+                            val nMidTop = Offset((np1.x + np2.x) / 2f, (np1.y + np2.y) / 2f)
+                            val nMidRight = Offset((np2.x + np3.x) / 2f, (np2.y + np3.y) / 2f)
+                            val nMidBottom = Offset((np3.x + np4.x) / 2f, (np3.y + np4.y) / 2f)
+                            val nMidLeft = Offset((np4.x + np1.x) / 2f, (np4.y + np1.y) / 2f)
+
+                            val updatedHandlePos = when (activeHandleIndex) {
+                                0 -> np1
+                                1 -> np2
+                                2 -> np3
+                                3 -> np4
+                                4 -> nMidTop
+                                5 -> nMidRight
+                                6 -> nMidBottom
+                                7 -> nMidLeft
+                                else -> change.position
+                            }
+                            currentOnTouchPoint(change.position)
+                            currentOnHandleActive(updatedHandlePos, change.position)
+                        } else {
+                            currentOnTouchPoint(null)
+                            currentOnHandleActive(null, null)
+                        }
                     },
                     onDragEnd = {
                         activeHandleIndex = -1
                         currentOnTouchPoint(null)
+                        currentOnHandleActive(null, null)
                     },
                     onDragCancel = {
                         activeHandleIndex = -1
                         currentOnTouchPoint(null)
+                        currentOnHandleActive(null, null)
                     }
                 )
             }

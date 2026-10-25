@@ -314,7 +314,14 @@ class ScannerRepository(
         }
     }
 
-    suspend fun stampSignatureOnPage(pageId: Long, signatureBitmap: Bitmap) = withContext(Dispatchers.IO) {
+    suspend fun stampSignatureOnPage(
+        pageId: Long,
+        signatureBitmap: Bitmap,
+        relX: Float = 0.55f,
+        relY: Float = 0.75f,
+        relWidth: Float = 0.35f,
+        relHeight: Float = -1f
+    ) = withContext(Dispatchers.IO) {
         val page = pageDao.getPageById(pageId) ?: return@withContext
         val processedFile = File(page.processedImagePath)
         if (!processedFile.exists()) return@withContext
@@ -323,14 +330,16 @@ class ScannerRepository(
         val mutable = origBitmap.copy(Bitmap.Config.ARGB_8888, true)
         val canvas = android.graphics.Canvas(mutable)
 
-        val targetWidth = (mutable.width * 0.35f).toInt()
-        val targetHeight = (targetWidth * signatureBitmap.height / signatureBitmap.width.toFloat()).toInt()
-        val destRect = android.graphics.Rect(
-            mutable.width - targetWidth - (mutable.width * 0.08f).toInt(),
-            mutable.height - targetHeight - (mutable.height * 0.08f).toInt(),
-            mutable.width - (mutable.width * 0.08f).toInt(),
-            mutable.height - (mutable.height * 0.08f).toInt()
-        )
+        val targetWidth = (mutable.width * relWidth).toInt().coerceAtLeast(10)
+        val targetHeight = if (relHeight > 0f) {
+            (mutable.height * relHeight).toInt().coerceAtLeast(10)
+        } else {
+            (targetWidth * signatureBitmap.height / signatureBitmap.width.toFloat()).toInt().coerceAtLeast(10)
+        }
+
+        val left = (mutable.width * relX).toInt().coerceIn(0, (mutable.width - targetWidth).coerceAtLeast(0))
+        val top = (mutable.height * relY).toInt().coerceIn(0, (mutable.height - targetHeight).coerceAtLeast(0))
+        val destRect = android.graphics.Rect(left, top, left + targetWidth, top + targetHeight)
 
         canvas.drawBitmap(signatureBitmap, null, destRect, null)
 
@@ -355,7 +364,9 @@ class ScannerRepository(
     suspend fun createCollagePage(
         documentId: Long,
         pageIds: List<Long>,
-        layout: CollageLayout
+        layout: CollageLayout,
+        watermarkConfig: org.openscanner.cv.CollageWatermarkConfig? = null,
+        slotTransforms: Map<Int, org.openscanner.cv.SlotTransform>? = null
     ): Page = withContext(Dispatchers.IO) {
         val targetSlotRects = CollageGenerator.calculateSlotRects(layout)
         val bitmaps = mutableListOf<Bitmap>()
@@ -384,7 +395,12 @@ class ScannerRepository(
         }
 
         val collageBitmap = try {
-            CollageGenerator.createCollage(bitmaps, layout)
+            CollageGenerator.createCollage(
+                bitmaps = bitmaps,
+                layout = layout,
+                watermarkConfig = watermarkConfig,
+                slotTransforms = slotTransforms
+            )
         } finally {
             // Recycle intermediate downsampled page bitmaps to prevent heap bloat
             bitmaps.forEach { bmp ->
