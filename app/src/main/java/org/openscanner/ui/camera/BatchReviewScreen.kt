@@ -1,5 +1,8 @@
 package org.openscanner.ui.camera
 
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Matrix
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
@@ -18,9 +21,11 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowBackIos
 import androidx.compose.material.icons.automirrored.filled.ArrowForwardIos
 import androidx.compose.material.icons.automirrored.filled.RotateLeft
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.outlined.AddBox
 import androidx.compose.material.icons.outlined.Cameraswitch
 import androidx.compose.material.icons.outlined.Crop
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -33,6 +38,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -44,12 +50,16 @@ import kotlinx.coroutines.withContext
 import org.openscanner.OpenScannerApp
 import org.openscanner.camera.BatchWarpProcessor
 import org.openscanner.cv.DocumentQuadrilateral
+import org.openscanner.cv.NativeScannerEngine
+import org.openscanner.cv.PointF
 import org.openscanner.data.model.EnhanceMode
 import org.openscanner.data.repository.ScannerRepository
 import org.openscanner.ui.theme.ScannerGreen
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.max
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
@@ -66,6 +76,13 @@ fun BatchReviewScreen(
     val coroutineScope = rememberCoroutineScope()
     val pagerState = rememberPagerState(initialPage = 0, pageCount = { batchQueue.size })
 
+    // If batch queue becomes empty (e.g. user deleted all items), return to camera
+    LaunchedEffect(batchQueue.size) {
+        if (batchQueue.isEmpty()) {
+            onClose()
+        }
+    }
+
     val defaultTitle = remember {
         "New Doc " + SimpleDateFormat("MM-dd-yyyy HH.mm", Locale.getDefault()).format(Date())
     }
@@ -81,9 +98,86 @@ fun BatchReviewScreen(
     // Per-page filter override if "applyToAllPages" is false
     var pageFilters by remember { mutableStateOf(mapOf<Long, EnhanceMode>()) }
 
+    // Global and per-page tone adjustments (Brightness, Contrast)
+    var globalBrightness by remember { mutableStateOf(0) }
+    var globalContrast by remember { mutableStateOf(0) }
+    var pageAdjustments by remember { mutableStateOf(mapOf<Long, Pair<Int, Int>>()) }
+
+    var showAdjustSheet by remember { mutableStateOf(false) }
+    var showDeleteConfirmDialog by remember { mutableStateOf(false) }
     var cropEditingItem by remember { mutableStateOf<BatchCaptureItem?>(null) }
 
-    val currentItem = batchQueue.getOrNull(pagerState.currentPage)
+    // In-memory caches for high-performance interactive preview
+    var warpedBaseCache by remember { mutableStateOf(mapOf<Long, Bitmap>()) }
+    var previewDisplayCache by remember { mutableStateOf(mapOf<Long, Bitmap>()) }
+    var filterThumbnailsCache by remember { mutableStateOf(mapOf<EnhanceMode, Bitmap>()) }
+
+    val safeCurrentPage = pagerState.currentPage.coerceIn(0, (batchQueue.size - 1).coerceAtLeast(0))
+    val currentItem = batchQueue.getOrNull(safeCurrentPage)
+
+    val currentEffectiveFilter = if (applyToAllPages) {
+        selectedFilter
+    } else {
+        currentItem?.let { pageFilters[it.id] } ?: selectedFilter
+    }
+
+    val currentTone = if (applyToAllPages) {
+        globalBrightness to globalContrast
+    } else {
+        currentItem?.let { pageAdjustments[it.id] } ?: (globalBrightness to globalContrast)
+    }
+
+    val filterModes = remember {
+        listOf(
+            EnhanceMode.NO_SHADOW to "Beta",
+            EnhanceMode.ORIGINAL to null,
+            EnhanceMode.LIGHTEN to null,
+            EnhanceMode.MAGIC_COLOR to null,
+            EnhanceMode.GRAYSCALE to null,
+            EnhanceMode.BW to null
+        )
+    }
+
+    // 1. Generate/update warped base bitmap when currentItem changes or crop/rotation changes
+    LaunchedEffect(currentItem?.id, currentItem?.cropQuad, currentItem?.rotationDegrees) {
+        val item = currentItem ?: return@LaunchedEffect
+        val cachedBase = warpedBaseCache[item.id]
+        if (cachedBase == null || cachedBase.isRecycled) {
+            val warped = loadWarpedBaseBitmap(item) { detectedQuad ->
+                onUpdateCropQuad(item.id, detectedQuad)
+            }
+            warpedBaseCache = warpedBaseCache + (item.id to warped)
+
+            // Generate filter strip miniatures from this base
+            val miniThumbs = generateFilterThumbnails(warped, filterModes.map { it.first })
+            filterThumbnailsCache = miniThumbs
+        } else {
+            // Already cached, refresh miniatures if needed
+            if (filterThumbnailsCache.isEmpty()) {
+                val miniThumbs = generateFilterThumbnails(cachedBase, filterModes.map { it.first })
+                filterThumbnailsCache = miniThumbs
+            }
+        }
+    }
+
+    // 2. Generate/update final display bitmap with filter & tone fine-tuning applied
+    LaunchedEffect(
+        currentItem?.id,
+        currentEffectiveFilter,
+        currentTone.first,
+        currentTone.second,
+        warpedBaseCache[currentItem?.id]
+    ) {
+        val item = currentItem ?: return@LaunchedEffect
+        val base = warpedBaseCache[item.id] ?: item.thumbnailBitmap
+        val filtered = applyFilterAndTonesToBitmap(
+            base = base,
+            filter = currentEffectiveFilter,
+            brightness = currentTone.first,
+            contrast = currentTone.second
+        )
+        previewDisplayCache = previewDisplayCache + (item.id to filtered)
+    }
 
     Scaffold(
         topBar = {
@@ -124,6 +218,21 @@ fun BatchReviewScreen(
                     }
                 },
                 actions = {
+                    // Quick Delete Icon in Top Bar
+                    IconButton(
+                        onClick = { showDeleteConfirmDialog = true },
+                        enabled = currentItem != null && !isProcessing
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Delete,
+                            contentDescription = "Delete Page",
+                            tint = Color(0xFFFF6B6B)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.width(4.dp))
+
+                    // Done Button
                     Button(
                         onClick = {
                             if (!isProcessing && batchQueue.isNotEmpty()) {
@@ -141,6 +250,10 @@ fun BatchReviewScreen(
                                         targetDocId = docId,
                                         items = batchQueue,
                                         selectedEnhanceMode = selectedFilter,
+                                        pageFilters = if (applyToAllPages) emptyMap() else pageFilters,
+                                        brightness = globalBrightness,
+                                        contrast = globalContrast,
+                                        pageAdjustments = if (applyToAllPages) emptyMap() else pageAdjustments,
                                         customTitle = documentTitle,
                                         onProgress = { done, total ->
                                             processingProgress = done to total
@@ -194,16 +307,7 @@ fun BatchReviewScreen(
                     )
                 }
 
-                // 2. Horizontal Filter Thumbnails Strip
-                val filterModes = listOf(
-                    EnhanceMode.NO_SHADOW to "Beta",
-                    EnhanceMode.ORIGINAL to null,
-                    EnhanceMode.LIGHTEN to null,
-                    EnhanceMode.MAGIC_COLOR to null,
-                    EnhanceMode.GRAYSCALE to null,
-                    EnhanceMode.BW to null
-                )
-
+                // 2. Horizontal Filter Strip with Live Filtered Miniatures & Double-Click/Tap Adjust
                 LazyRow(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -212,22 +316,22 @@ fun BatchReviewScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     items(filterModes) { (mode, badge) ->
-                        val currentEffectiveFilter = if (applyToAllPages) {
-                            selectedFilter
-                        } else {
-                            currentItem?.let { pageFilters[it.id] } ?: selectedFilter
-                        }
                         val isSelected = currentEffectiveFilter == mode
 
                         Column(
                             horizontalAlignment = Alignment.CenterHorizontally,
                             modifier = Modifier
                                 .clickable {
-                                    if (applyToAllPages) {
-                                        selectedFilter = mode
+                                    if (isSelected) {
+                                        // Double-click or re-click on selected filter opens tone fine-tuning sheet
+                                        showAdjustSheet = true
                                     } else {
-                                        currentItem?.let { item ->
-                                            pageFilters = pageFilters + (item.id to mode)
+                                        if (applyToAllPages) {
+                                            selectedFilter = mode
+                                        } else {
+                                            currentItem?.let { item ->
+                                                pageFilters = pageFilters + (item.id to mode)
+                                            }
                                         }
                                     }
                                 }
@@ -244,10 +348,11 @@ fun BatchReviewScreen(
                                         shape = RoundedCornerShape(6.dp)
                                     )
                             ) {
-                                // Miniature Page Preview with Filter Effect
-                                if (currentItem != null) {
+                                // Miniature Page Preview with this filter effect applied
+                                val miniBmp = filterThumbnailsCache[mode] ?: currentItem?.thumbnailBitmap
+                                if (miniBmp != null) {
                                     Image(
-                                        bitmap = currentItem.thumbnailBitmap.asImageBitmap(),
+                                        bitmap = miniBmp.asImageBitmap(),
                                         contentDescription = mode.displayName,
                                         contentScale = ContentScale.Crop,
                                         modifier = Modifier.fillMaxSize()
@@ -271,9 +376,30 @@ fun BatchReviewScreen(
                                     }
                                 }
 
+                                // If selected, show small tune icon indicator indicating adjustable
+                                if (isSelected) {
+                                    Surface(
+                                        shape = CircleShape,
+                                        color = Color.Black.copy(alpha = 0.75f),
+                                        modifier = Modifier
+                                            .align(Alignment.TopStart)
+                                            .padding(3.dp)
+                                            .size(16.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Tune,
+                                            contentDescription = "Adjust",
+                                            tint = ScannerGreen,
+                                            modifier = Modifier
+                                                .fillMaxSize()
+                                                .padding(2.dp)
+                                        )
+                                    }
+                                }
+
                                 // Dark overlay for filter label at bottom of thumbnail
                                 Surface(
-                                    color = Color.Black.copy(alpha = 0.65f),
+                                    color = Color.Black.copy(alpha = 0.70f),
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .align(Alignment.BottomCenter)
@@ -284,7 +410,7 @@ fun BatchReviewScreen(
                                         fontSize = 10.sp,
                                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
                                         maxLines = 1,
-                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                        textAlign = TextAlign.Center,
                                         modifier = Modifier.padding(vertical = 2.dp)
                                     )
                                 }
@@ -295,12 +421,12 @@ fun BatchReviewScreen(
 
                 HorizontalDivider(color = Color(0xFF1E1E1E), thickness = 0.5.dp)
 
-                // 3. Bottom Actions Toolbar (Retake, Add, Left, Crop)
+                // 3. Bottom Actions Toolbar (Retake, Add, Left, Crop, Delete)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(vertical = 10.dp, horizontal = 16.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                        .padding(vertical = 10.dp, horizontal = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     BatchActionButton(
@@ -309,7 +435,7 @@ fun BatchReviewScreen(
                         onClick = {
                             currentItem?.let { item ->
                                 onRemoveItem(item.id)
-                                onClose() // Return to camera to re-shoot this frame
+                                onClose()
                             }
                         }
                     )
@@ -318,7 +444,7 @@ fun BatchReviewScreen(
                         icon = Icons.Outlined.AddBox,
                         label = "Add",
                         onClick = {
-                            onClose() // Return to camera to capture more batch items
+                            onClose()
                         }
                     )
 
@@ -326,7 +452,11 @@ fun BatchReviewScreen(
                         icon = Icons.AutoMirrored.Filled.RotateLeft,
                         label = "Left",
                         onClick = {
-                            currentItem?.let { onRotateItem(it.id, false) }
+                            currentItem?.let { item ->
+                                warpedBaseCache = warpedBaseCache - item.id
+                                previewDisplayCache = previewDisplayCache - item.id
+                                onRotateItem(item.id, false)
+                            }
                         }
                     )
 
@@ -335,6 +465,14 @@ fun BatchReviewScreen(
                         label = "Crop",
                         onClick = {
                             cropEditingItem = currentItem
+                        }
+                    )
+
+                    BatchActionButton(
+                        icon = Icons.Outlined.Delete,
+                        label = "Delete",
+                        onClick = {
+                            showDeleteConfirmDialog = true
                         }
                     )
                 }
@@ -348,7 +486,7 @@ fun BatchReviewScreen(
                 .background(Color(0xFF161616)),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Document Page Viewport with Page Peeking
+            // Document Page Viewport with Original Image Aspect Ratio & Live Cropped/Filtered Preview
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -358,25 +496,53 @@ fun BatchReviewScreen(
                 HorizontalPager(
                     state = pagerState,
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(horizontal = 36.dp),
+                    contentPadding = PaddingValues(horizontal = 24.dp),
                     pageSpacing = 16.dp
                 ) { pageIndex ->
                     val item = batchQueue.getOrNull(pageIndex)
                     if (item != null) {
-                        Surface(
+                        val displayBmp = previewDisplayCache[item.id]
+                            ?: warpedBaseCache[item.id]
+                            ?: item.thumbnailBitmap
+
+                        BoxWithConstraints(
                             modifier = Modifier
-                                .fillMaxHeight()
-                                .aspectRatio(0.707f) // Standard A4 Paper Ratio
-                                .clip(RoundedCornerShape(6.dp)),
-                            color = Color.White,
-                            shadowElevation = 8.dp
+                                .fillMaxSize()
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            contentAlignment = Alignment.Center
                         ) {
-                            Image(
-                                bitmap = item.thumbnailBitmap.asImageBitmap(),
-                                contentDescription = "Page ${pageIndex + 1}",
-                                contentScale = ContentScale.Fit,
-                                modifier = Modifier.fillMaxSize()
-                            )
+                            val bmpW = displayBmp.width.toFloat()
+                            val bmpH = displayBmp.height.toFloat()
+                            val aspect = if (bmpH > 0f) bmpW / bmpH else 0.707f
+
+                            val maxW = maxWidth
+                            val maxH = maxHeight
+
+                            // Dynamically scale card dimensions to preserve exact original / warped document aspect ratio
+                            val (cardW, cardH) = if (maxW.value / maxH.value > aspect) {
+                                val h = maxH
+                                val w = h * aspect
+                                w to h
+                            } else {
+                                val w = maxW
+                                val h = w / aspect
+                                w to h
+                            }
+
+                            Surface(
+                                modifier = Modifier
+                                    .size(cardW, cardH)
+                                    .clip(RoundedCornerShape(8.dp)),
+                                color = Color.White,
+                                shadowElevation = 8.dp
+                            ) {
+                                Image(
+                                    bitmap = displayBmp.asImageBitmap(),
+                                    contentDescription = "Page ${pageIndex + 1}",
+                                    contentScale = ContentScale.FillBounds,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
                         }
                     }
                 }
@@ -413,7 +579,7 @@ fun BatchReviewScreen(
                     modifier = Modifier.padding(horizontal = 6.dp)
                 ) {
                     Text(
-                        text = "${pagerState.currentPage + 1}/${batchQueue.size}",
+                        text = "${safeCurrentPage + 1}/${batchQueue.size}",
                         color = Color.White,
                         fontWeight = FontWeight.Bold,
                         fontSize = 14.sp,
@@ -439,6 +605,184 @@ fun BatchReviewScreen(
                 }
             }
         }
+    }
+
+    // Tone Fine-Tuning Modal Bottom Sheet (Double-Click / Re-Click on filter)
+    if (showAdjustSheet) {
+        var tempBrightness by remember(currentTone) { mutableStateOf(currentTone.first) }
+        var tempContrast by remember(currentTone) { mutableStateOf(currentTone.second) }
+
+        ModalBottomSheet(
+            onDismissRequest = { showAdjustSheet = false },
+            containerColor = Color(0xFF1E1E1E),
+            dragHandle = { BottomSheetDefaults.DragHandle(color = Color.Gray) }
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp, vertical = 12.dp)
+                    .navigationBarsPadding()
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text(
+                            text = "Fine-Tune Tone",
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 18.sp
+                        )
+                        Text(
+                            text = currentEffectiveFilter.displayName,
+                            color = ScannerGreen,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                    TextButton(
+                        onClick = {
+                            tempBrightness = 0
+                            tempContrast = 0
+                            if (applyToAllPages) {
+                                globalBrightness = 0
+                                globalContrast = 0
+                            } else {
+                                currentItem?.let { item ->
+                                    pageAdjustments = pageAdjustments + (item.id to (0 to 0))
+                                }
+                            }
+                        }
+                    ) {
+                        Text("Reset", color = Color(0xFFFF9800), fontWeight = FontWeight.SemiBold)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Brightness Slider
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("Brightness", color = Color.LightGray, fontSize = 14.sp)
+                    Text(
+                        text = if (tempBrightness > 0) "+$tempBrightness" else "$tempBrightness",
+                        color = if (tempBrightness != 0) ScannerGreen else Color.Gray,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp
+                    )
+                }
+                Slider(
+                    value = tempBrightness.toFloat(),
+                    onValueChange = { newVal ->
+                        tempBrightness = newVal.toInt()
+                        if (applyToAllPages) {
+                            globalBrightness = tempBrightness
+                        } else {
+                            currentItem?.let { item ->
+                                pageAdjustments = pageAdjustments + (item.id to (tempBrightness to tempContrast))
+                            }
+                        }
+                    },
+                    valueRange = -80f..80f,
+                    colors = SliderDefaults.colors(
+                        thumbColor = ScannerGreen,
+                        activeTrackColor = ScannerGreen,
+                        inactiveTrackColor = Color(0xFF333333)
+                    )
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Contrast Slider
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("Contrast", color = Color.LightGray, fontSize = 14.sp)
+                    Text(
+                        text = if (tempContrast > 0) "+$tempContrast" else "$tempContrast",
+                        color = if (tempContrast != 0) ScannerGreen else Color.Gray,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp
+                    )
+                }
+                Slider(
+                    value = tempContrast.toFloat(),
+                    onValueChange = { newVal ->
+                        tempContrast = newVal.toInt()
+                        if (applyToAllPages) {
+                            globalContrast = tempContrast
+                        } else {
+                            currentItem?.let { item ->
+                                pageAdjustments = pageAdjustments + (item.id to (tempBrightness to tempContrast))
+                            }
+                        }
+                    },
+                    valueRange = -80f..80f,
+                    colors = SliderDefaults.colors(
+                        thumbColor = ScannerGreen,
+                        activeTrackColor = ScannerGreen,
+                        inactiveTrackColor = Color(0xFF333333)
+                    )
+                )
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                Button(
+                    onClick = { showAdjustSheet = false },
+                    colors = ButtonDefaults.buttonColors(containerColor = ScannerGreen),
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text("Apply", color = Color.White, fontWeight = FontWeight.Bold)
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+            }
+        }
+    }
+
+    // Delete Confirmation Dialog
+    if (showDeleteConfirmDialog && currentItem != null) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirmDialog = false },
+            title = { Text("Delete Page?", color = Color.White, fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "Are you sure you want to delete page ${safeCurrentPage + 1}?",
+                    color = Color.LightGray,
+                    fontSize = 14.sp
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val idToDelete = currentItem.id
+                        val isLast = batchQueue.size <= 1
+                        showDeleteConfirmDialog = false
+                        warpedBaseCache = warpedBaseCache - idToDelete
+                        previewDisplayCache = previewDisplayCache - idToDelete
+                        onRemoveItem(idToDelete)
+                        if (isLast) {
+                            onClose()
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE53935))
+                ) {
+                    Text("Delete", color = Color.White)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirmDialog = false }) {
+                    Text("Cancel", color = Color.Gray)
+                }
+            },
+            containerColor = Color(0xFF1E1E1E)
+        )
     }
 
     // Edit Document Title Dialog
@@ -494,6 +838,9 @@ fun BatchReviewScreen(
                 rotationDegrees = item.rotationDegrees,
                 onCropConfirmed = { newQuad ->
                     onUpdateCropQuad(item.id, newQuad)
+                    // Invalidate caches so preview re-warps immediately with new quad
+                    warpedBaseCache = warpedBaseCache - item.id
+                    previewDisplayCache = previewDisplayCache - item.id
                     cropEditingItem = null
                 },
                 onClose = { cropEditingItem = null }
@@ -553,10 +900,126 @@ fun BatchActionButton(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
             .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 4.dp)
+            .padding(horizontal = 10.dp, vertical = 4.dp)
     ) {
         Icon(icon, contentDescription = label, tint = Color.White, modifier = Modifier.size(24.dp))
         Spacer(modifier = Modifier.height(4.dp))
         Text(label, color = Color.LightGray, fontSize = 11.sp, fontWeight = FontWeight.Medium)
     }
+}
+
+/**
+ * Loads and warps the document perspective on Dispatchers.IO for interactive preview.
+ * Returns the perspective-corrected, un-filtered document bitmap.
+ */
+private suspend fun loadWarpedBaseBitmap(
+    item: BatchCaptureItem,
+    onAutoDetected: (DocumentQuadrilateral) -> Unit
+): Bitmap = withContext(Dispatchers.IO) {
+    val file = File(item.rawFilePath)
+    if (!file.exists()) return@withContext item.thumbnailBitmap
+
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeFile(file.absolutePath, bounds)
+    val origW = bounds.outWidth
+    val origH = bounds.outHeight
+    if (origW <= 0 || origH <= 0) return@withContext item.thumbnailBitmap
+
+    var sampleSize = 1
+    val targetDim = 1200
+    while (origW / (sampleSize * 2) >= targetDim && origH / (sampleSize * 2) >= targetDim) {
+        sampleSize *= 2
+    }
+    val opts = BitmapFactory.Options().apply {
+        inSampleSize = sampleSize
+        inPreferredConfig = Bitmap.Config.ARGB_8888
+    }
+    var rawBmp = BitmapFactory.decodeFile(file.absolutePath, opts) ?: return@withContext item.thumbnailBitmap
+
+    if (item.rotationDegrees != 0) {
+        val m = Matrix().apply { postRotate(item.rotationDegrees.toFloat()) }
+        val rotated = Bitmap.createBitmap(rawBmp, 0, 0, rawBmp.width, rawBmp.height, m, true)
+        if (rotated != rawBmp) {
+            rawBmp.recycle()
+            rawBmp = rotated
+        }
+    }
+
+    val fullRotW = if (item.rotationDegrees % 180 == 0) origW.toFloat() else origH.toFloat()
+    val fullRotH = if (item.rotationDegrees % 180 == 0) origH.toFloat() else origW.toFloat()
+
+    val quad = if (item.cropQuad != null) {
+        val sx = rawBmp.width.toFloat() / fullRotW
+        val sy = rawBmp.height.toFloat() / fullRotH
+        DocumentQuadrilateral(
+            topLeft = PointF(item.cropQuad!!.topLeft.x * sx, item.cropQuad!!.topLeft.y * sy),
+            topRight = PointF(item.cropQuad!!.topRight.x * sx, item.cropQuad!!.topRight.y * sy),
+            bottomRight = PointF(item.cropQuad!!.bottomRight.x * sx, item.cropQuad!!.bottomRight.y * sy),
+            bottomLeft = PointF(item.cropQuad!!.bottomLeft.x * sx, item.cropQuad!!.bottomLeft.y * sy)
+        )
+    } else {
+        val detected = NativeScannerEngine.detectDocumentBounds(rawBmp)
+        val invSx = fullRotW / rawBmp.width.toFloat()
+        val invSy = fullRotH / rawBmp.height.toFloat()
+        val origQuad = DocumentQuadrilateral(
+            topLeft = PointF(detected.topLeft.x * invSx, detected.topLeft.y * invSy),
+            topRight = PointF(detected.topRight.x * invSx, detected.topRight.y * invSy),
+            bottomRight = PointF(detected.bottomRight.x * invSx, detected.bottomRight.y * invSy),
+            bottomLeft = PointF(detected.bottomLeft.x * invSx, detected.bottomLeft.y * invSy)
+        )
+        onAutoDetected(origQuad)
+        detected
+    }
+
+    val topW = quad.topLeft.distanceTo(quad.topRight)
+    val botW = quad.bottomLeft.distanceTo(quad.bottomRight)
+    val leftH = quad.topLeft.distanceTo(quad.bottomLeft)
+    val rightH = quad.topRight.distanceTo(quad.bottomRight)
+    val targetW = max(topW, botW).toInt().coerceAtLeast(300)
+    val targetH = max(leftH, rightH).toInt().coerceAtLeast(400)
+
+    val warped = NativeScannerEngine.warpDocument(rawBmp, quad, targetW, targetH)
+    if (warped != rawBmp) {
+        rawBmp.recycle()
+    }
+    warped
+}
+
+/**
+ * Applies the selected enhancement filter and brightness/contrast adjustments to a bitmap copy.
+ */
+private suspend fun applyFilterAndTonesToBitmap(
+    base: Bitmap,
+    filter: EnhanceMode,
+    brightness: Int,
+    contrast: Int
+): Bitmap = withContext(Dispatchers.Default) {
+    val copy = base.copy(Bitmap.Config.ARGB_8888, true)
+    NativeScannerEngine.applyEnhancement(copy, filter.id)
+    if (brightness != 0 || contrast != 0) {
+        NativeScannerEngine.adjustBrightnessContrast(copy, brightness, contrast)
+    }
+    copy
+}
+
+/**
+ * Generates miniature filter previews for the bottom filter strip.
+ */
+private suspend fun generateFilterThumbnails(
+    base: Bitmap,
+    modes: List<EnhanceMode>
+): Map<EnhanceMode, Bitmap> = withContext(Dispatchers.Default) {
+    val thumbW = 90
+    val thumbH = 120
+    val scaled = Bitmap.createScaledBitmap(base, thumbW, thumbH, true)
+    val map = mutableMapOf<EnhanceMode, Bitmap>()
+    for (mode in modes) {
+        val copy = scaled.copy(Bitmap.Config.ARGB_8888, true)
+        NativeScannerEngine.applyEnhancement(copy, mode.id)
+        map[mode] = copy
+    }
+    if (scaled != base) {
+        scaled.recycle()
+    }
+    map
 }

@@ -34,8 +34,12 @@ class BatchWarpProcessor(
         targetDocId: Long,
         items: List<BatchCaptureItem>,
         selectedEnhanceMode: EnhanceMode = EnhanceMode.MAGIC_COLOR,
+        pageFilters: Map<Long, EnhanceMode> = emptyMap(),
+        brightness: Int = 0,
+        contrast: Int = 0,
+        pageAdjustments: Map<Long, Pair<Int, Int>> = emptyMap(),
         customTitle: String? = null,
-        onProgress: (completed: Int, total: Int) -> Unit
+        onProgress: (completed: Int, total: Int) -> Unit = { _, _ -> }
     ): Long = withContext(Dispatchers.Default) {
         val total = items.size
         if (total == 0) return@withContext targetDocId
@@ -56,10 +60,14 @@ class BatchWarpProcessor(
             items.forEach { item ->
                 launch {
                     semaphore.withPermit {
+                        val effectiveMode = pageFilters[item.id] ?: selectedEnhanceMode
+                        val (itemBrightness, itemContrast) = pageAdjustments[item.id] ?: (brightness to contrast)
                         processSingleItem(
                             docId = docId,
                             item = item,
-                            enhanceMode = selectedEnhanceMode
+                            enhanceMode = effectiveMode,
+                            brightness = itemBrightness,
+                            contrast = itemContrast
                         )
                         val done = completedCount.incrementAndGet()
                         withContext(Dispatchers.Main) {
@@ -76,7 +84,9 @@ class BatchWarpProcessor(
     private suspend fun processSingleItem(
         docId: Long,
         item: BatchCaptureItem,
-        enhanceMode: EnhanceMode
+        enhanceMode: EnhanceMode,
+        brightness: Int = 0,
+        contrast: Int = 0
     ) = withContext(Dispatchers.Default) {
         val file = File(item.rawFilePath)
         if (!file.exists()) return@withContext
@@ -109,7 +119,24 @@ class BatchWarpProcessor(
         }
 
         // 3. Document Quad detection (deferred auto-crop if user did not manually crop)
-        val quad = item.cropQuad ?: NativeScannerEngine.detectDocumentBounds(rawBmp)
+        val quad = if (item.cropQuad != null) {
+            val fullRotW = if (item.rotationDegrees % 180 == 0) rawW.toFloat() else rawH.toFloat()
+            val fullRotH = if (item.rotationDegrees % 180 == 0) rawH.toFloat() else rawW.toFloat()
+            val sx = rawBmp.width.toFloat() / fullRotW
+            val sy = rawBmp.height.toFloat() / fullRotH
+            if (kotlin.math.abs(sx - 1f) > 0.001f || kotlin.math.abs(sy - 1f) > 0.001f) {
+                org.openscanner.cv.DocumentQuadrilateral(
+                    topLeft = org.openscanner.cv.PointF(item.cropQuad!!.topLeft.x * sx, item.cropQuad!!.topLeft.y * sy),
+                    topRight = org.openscanner.cv.PointF(item.cropQuad!!.topRight.x * sx, item.cropQuad!!.topRight.y * sy),
+                    bottomRight = org.openscanner.cv.PointF(item.cropQuad!!.bottomRight.x * sx, item.cropQuad!!.bottomRight.y * sy),
+                    bottomLeft = org.openscanner.cv.PointF(item.cropQuad!!.bottomLeft.x * sx, item.cropQuad!!.bottomLeft.y * sy)
+                )
+            } else {
+                item.cropQuad!!
+            }
+        } else {
+            NativeScannerEngine.detectDocumentBounds(rawBmp)
+        }
 
         // 4. Perspective Warp
         val topW = quad.topLeft.distanceTo(quad.topRight)
@@ -121,8 +148,11 @@ class BatchWarpProcessor(
 
         val warpedBmp = NativeScannerEngine.warpDocument(rawBmp, quad, targetW, targetH)
 
-        // 5. Apply Enhancement Filter (e.g. Magic Color)
+        // 5. Apply Enhancement Filter (e.g. Magic Color) and Tone Fine-Tuning
         NativeScannerEngine.applyEnhancement(warpedBmp, enhanceMode.id)
+        if (brightness != 0 || contrast != 0) {
+            NativeScannerEngine.adjustBrightnessContrast(warpedBmp, brightness, contrast)
+        }
 
         // 6. Save Page into Room & filesDir/scans/
         val borderStr = quad.toFloatArray().joinToString(",")
