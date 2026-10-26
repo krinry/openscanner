@@ -316,41 +316,11 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     fun importPdfDocument(uri: Uri, onDone: (Long) -> Unit) {
         val currentFolderId = _selectedFolder.value?.id ?: -1L
         viewModelScope.launch(Dispatchers.IO) {
-            val context = getApplication<Application>()
-            try {
-                val pfd = context.contentResolver.openFileDescriptor(uri, "r") ?: return@launch
-                val pdfRenderer = PdfRenderer(pfd)
-                val count = pdfRenderer.pageCount
-                if (count > 0) {
-                    val title = "PDF " + SimpleDateFormat("dd-MM-yyyy HH.mm", Locale.getDefault()).format(Date())
-                    val docId = repository.createNewDocument(title, currentFolderId)
-
-                    for (i in 0 until count) {
-                        val page = pdfRenderer.openPage(i)
-                        val w = page.width * 2
-                        val h = page.height * 2
-                        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-                        bmp.eraseColor(android.graphics.Color.WHITE)
-                        page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-                        page.close()
-
-                        repository.savePage(
-                            documentId = docId,
-                            processedBitmap = bmp,
-                            originalBitmap = bmp,
-                            cropBorderJson = "",
-                            enhanceModeId = 0
-                        )
-                    }
-                    pdfRenderer.close()
-                    pfd.close()
-
-                    withContext(Dispatchers.Main) {
-                        onDone(docId)
-                    }
+            val docId = repository.importPdfDocument(uri, currentFolderId)
+            if (docId > 0) {
+                withContext(Dispatchers.Main) {
+                    onDone(docId)
                 }
-            } catch (e: Exception) {
-                e.printStackTrace()
             }
         }
     }

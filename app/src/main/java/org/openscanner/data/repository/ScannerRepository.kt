@@ -3,6 +3,7 @@ package org.openscanner.data.repository
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.net.Uri
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
@@ -348,6 +349,45 @@ class ScannerRepository(
         documentDao.updateDocumentTitle(docId, title)
     }
 
+    suspend fun importPdfDocument(uri: Uri, folderId: Long = -1L): Long = withContext(Dispatchers.IO) {
+        val pfd = context.contentResolver.openFileDescriptor(uri, "r") ?: return@withContext -1L
+        try {
+            val pdfRenderer = android.graphics.pdf.PdfRenderer(pfd)
+            val count = pdfRenderer.pageCount
+            if (count == 0) {
+                pdfRenderer.close()
+                return@withContext -1L
+            }
+            val title = "PDF " + SimpleDateFormat("dd-MM-yyyy HH.mm", Locale.getDefault()).format(Date())
+            val docId = createNewDocument(title, folderId)
+            for (i in 0 until count) {
+                val page = pdfRenderer.openPage(i)
+                val w = (page.width * 2).coerceIn(400, 3000)
+                val h = (page.height * 2).coerceIn(600, 4200)
+                val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+                bmp.eraseColor(android.graphics.Color.WHITE)
+                page.render(bmp, null, null, android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                page.close()
+
+                savePage(
+                    documentId = docId,
+                    processedBitmap = bmp,
+                    originalBitmap = bmp,
+                    cropBorderJson = "",
+                    enhanceModeId = 0
+                )
+                if (!bmp.isRecycled) bmp.recycle()
+            }
+            pdfRenderer.close()
+            docId
+        } catch (e: Exception) {
+            e.printStackTrace()
+            -1L
+        } finally {
+            pfd.close()
+        }
+    }
+
     suspend fun savePage(
         documentId: Long,
         processedBitmap: Bitmap,
@@ -407,6 +447,10 @@ class ScannerRepository(
 
     suspend fun updatePage(page: Page) = withContext(Dispatchers.IO) {
         pageDao.updatePage(page)
+    }
+
+    suspend fun updatePageAnnotations(pageId: Long, annotationsJson: String) = withContext(Dispatchers.IO) {
+        pageDao.updatePageAnnotations(pageId, annotationsJson)
     }
 
     suspend fun updateDocument(document: Document) = withContext(Dispatchers.IO) {

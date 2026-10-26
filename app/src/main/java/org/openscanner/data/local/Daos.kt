@@ -144,6 +144,9 @@ interface PageDao {
     @Update
     suspend fun updatePage(page: Page)
 
+    @Query("UPDATE pages SET annotationsJson = :json WHERE id = :pageId")
+    suspend fun updatePageAnnotations(pageId: Long, json: String)
+
     @Delete
     suspend fun deletePage(page: Page)
 

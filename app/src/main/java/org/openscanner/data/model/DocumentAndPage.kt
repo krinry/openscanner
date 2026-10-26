@@ -42,5 +42,6 @@ data class Page(
     val contrast: Int = 0,
     val ocrText: String = "",
     val watermarkText: String = "",
+    val annotationsJson: String = "",
     val createdTime: Long = System.currentTimeMillis()
 )

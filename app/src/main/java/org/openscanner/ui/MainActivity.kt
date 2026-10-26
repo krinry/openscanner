@@ -18,8 +18,10 @@ import org.openscanner.ui.crop.CropScreen
 import org.openscanner.ui.detail.DocumentDetailScreen
 import org.openscanner.ui.filter.FilterScreen
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import org.openscanner.ui.home.HomeScreen
 import org.openscanner.ui.navigation.Screen
@@ -51,6 +53,34 @@ class MainActivity : ComponentActivity() {
                     color = MaterialTheme.colorScheme.background
                 ) {
                     val navController = rememberNavController()
+
+                    val externalUri = remember {
+                        val data = intent?.data
+                        val mime = intent?.type ?: (data?.let { context.contentResolver.getType(it) } ?: "")
+                        if (data != null && (mime == "application/pdf" || data.toString().endsWith(".pdf", ignoreCase = true))) {
+                            data
+                        } else null
+                    }
+
+                    LaunchedEffect(externalUri) {
+                        if (externalUri != null) {
+                            val app = context.applicationContext as org.openscanner.OpenScannerApp
+                            val repo = org.openscanner.data.repository.ScannerRepository(
+                                context,
+                                app.database.documentDao(),
+                                app.database.pageDao(),
+                                app.database.folderDao()
+                            )
+                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                val newDocId = repo.importPdfDocument(externalUri)
+                                if (newDocId > 0) {
+                                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                        navController.navigate(Screen.EditPdf.createRoute(newDocId, 0))
+                                    }
+                                }
+                            }
+                        }
+                    }
 
                     NavHost(
                         navController = navController,
