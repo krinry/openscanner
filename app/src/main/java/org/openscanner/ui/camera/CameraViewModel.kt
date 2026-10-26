@@ -16,11 +16,18 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.openscanner.OpenScannerApp
+import org.openscanner.camera.BatchWarpProcessor
 import org.openscanner.camera.CaptureMode
+import org.openscanner.data.model.EnhanceMode
 import org.openscanner.cv.DocumentQuadrilateral
 import org.openscanner.cv.PointF
+import org.openscanner.data.repository.ScannerRepository
 import java.io.File
 import java.io.FileOutputStream
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 data class BatchCaptureItem(
     val id: Long = System.nanoTime(),
@@ -29,6 +36,12 @@ data class BatchCaptureItem(
     var rotationDegrees: Int = 0,
     var cropQuad: DocumentQuadrilateral? = null
 )
+
+enum class QualityMode(val label: String, val description: String) {
+    SD("SD", "Standard 1080p, faster capture"),
+    HD("HD", "High Definition balanced"),
+    UHD("UHD", "Maximum sensor resolution")
+}
 
 class CameraViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -43,6 +56,18 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _flashMode = MutableStateFlow(ImageCapture.FLASH_MODE_OFF)
     val flashMode: StateFlow<Int> = _flashMode
+
+    private val _qualityMode = MutableStateFlow(QualityMode.HD)
+    val qualityMode: StateFlow<QualityMode> = _qualityMode
+
+    private val _selectedFilter = MutableStateFlow(1) // 1 = Magic Color (default)
+    val selectedFilter: StateFlow<Int> = _selectedFilter
+
+    private val _cropAfterScan = MutableStateFlow(false)
+    val cropAfterScan: StateFlow<Boolean> = _cropAfterScan
+
+    private val _autoCropEnabled = MutableStateFlow(true)
+    val autoCropEnabled: StateFlow<Boolean> = _autoCropEnabled
 
     private val _batchCount = MutableStateFlow(0)
     val batchCount: StateFlow<Int> = _batchCount
@@ -81,6 +106,32 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             ImageCapture.FLASH_MODE_ON -> ImageCapture.FLASH_MODE_AUTO
             else -> ImageCapture.FLASH_MODE_OFF
         }
+    }
+
+    fun cycleQuality(): QualityMode {
+        val next = when (_qualityMode.value) {
+            QualityMode.SD -> QualityMode.HD
+            QualityMode.HD -> QualityMode.UHD
+            QualityMode.UHD -> QualityMode.SD
+        }
+        _qualityMode.value = next
+        return next
+    }
+
+    fun setQualityMode(mode: QualityMode) {
+        _qualityMode.value = mode
+    }
+
+    fun setSelectedFilter(filterId: Int) {
+        _selectedFilter.value = filterId
+    }
+
+    fun setCropAfterScan(enabled: Boolean) {
+        _cropAfterScan.value = enabled
+    }
+
+    fun setAutoCropEnabled(enabled: Boolean) {
+        _autoCropEnabled.value = enabled
     }
 
     fun addBatchItem(item: BatchCaptureItem) {
@@ -328,5 +379,45 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 e.printStackTrace()
             }
         }
+    }
+
+    suspend fun saveBatchAsDraft(docId: Long = -1L): Long = withContext(Dispatchers.IO) {
+        val items = _batchQueue.value
+        if (items.isEmpty()) return@withContext -1L
+        val context = getApplication<Application>()
+        val app = context as OpenScannerApp
+        val repo = ScannerRepository(
+            context = context,
+            documentDao = app.database.documentDao(),
+            pageDao = app.database.pageDao(),
+            folderDao = app.database.folderDao()
+        )
+        val processor = BatchWarpProcessor(context, repo)
+        val draftTitle = "Draft " + SimpleDateFormat("dd MMM, HH:mm", Locale.getDefault()).format(Date())
+        val savedId = processor.processBatch(
+            targetDocId = if (docId > 0) docId else -1L,
+            items = items,
+            selectedEnhanceMode = EnhanceMode.fromId(_selectedFilter.value),
+            pageFilters = emptyMap(),
+            brightness = 0,
+            contrast = 0,
+            pageAdjustments = emptyMap(),
+            customTitle = draftTitle,
+            onProgress = { _: Int, _: Int -> }
+        )
+        // Mark tags with "draft"
+        if (savedId > 0) {
+            try {
+                val doc = repo.getDocumentById(savedId)
+                if (doc != null) {
+                    repo.updateDocument(doc.copy(tags = "draft"))
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+        _batchQueue.value = emptyList()
+        _batchCount.value = 0
+        savedId
     }
 }

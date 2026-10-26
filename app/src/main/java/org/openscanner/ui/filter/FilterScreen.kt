@@ -95,6 +95,7 @@ fun FilterScreen(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .navigationBarsPadding()
                         .padding(vertical = 12.dp)
                 ) {
                     // Filter selection carousel with document enhancement thumbnails

@@ -351,10 +351,10 @@ fun DocumentDetailScreen(
         CollageStudioDialog(
             pages = pages,
             onDismiss = { showCollageDialog = false },
-            onGenerateCollage = { layout, pageIds, watermarkConfig, transforms, drawBorders, customPaths ->
-                viewModel.createCollage(layout, pageIds, watermarkConfig, transforms, drawBorders, customPaths) {
+            onGenerateMultiCollage = { specs, watermarkConfig, drawBorders ->
+                viewModel.createMultiPageCollage(specs, watermarkConfig, drawBorders) {
                     showCollageDialog = false
-                    Toast.makeText(context, "Collage page generated!", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "${specs.size} collage page(s) generated!", Toast.LENGTH_SHORT).show()
                 }
             }
         )

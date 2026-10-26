@@ -20,6 +20,13 @@ import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.*
 
+data class CollagePageSpec(
+    val layout: CollageLayout,
+    val pageIds: List<Long>,
+    val slotTransforms: Map<Int, org.openscanner.cv.SlotTransform>? = null,
+    val slotCustomPaths: Map<Int, String>? = null
+)
+
 class ScannerRepository(
     private val context: Context,
     private val documentDao: DocumentDao,
@@ -464,7 +471,7 @@ class ScannerRepository(
         slotCustomPaths: Map<Int, String>? = null
     ): Page = withContext(Dispatchers.IO) {
         val targetSlotRects = CollageGenerator.calculateSlotRects(layout)
-        val bitmaps = mutableListOf<Bitmap>()
+        val bitmaps = mutableListOf<Bitmap?>()
         val slotCount = layout.maxPages
 
         for (index in 0 until slotCount) {
@@ -473,7 +480,7 @@ class ScannerRepository(
                 customPath
             } else {
                 val pId = pageIds.getOrNull(index) ?: pageIds.getOrNull(index % pageIds.size.coerceAtLeast(1))
-                if (pId != null) {
+                if (pId != null && pId != 0L) {
                     val page = pageDao.getPageById(pId)
                     page?.processedImagePath.orEmpty()
                 } else ""
@@ -490,13 +497,14 @@ class ScannerRepository(
                 } else {
                     BitmapFactory.decodeFile(path)
                 }
-                if (bmp != null) {
-                    bitmaps.add(bmp)
-                }
+                bitmaps.add(bmp)
+            } else {
+                bitmaps.add(null)
             }
         }
 
-        if (bitmaps.isEmpty()) {
+        val nonNullBitmaps = bitmaps.filterNotNull()
+        if (nonNullBitmaps.isEmpty()) {
             throw IllegalStateException("No valid page images found for collage")
         }
 
@@ -510,7 +518,7 @@ class ScannerRepository(
             )
         } finally {
             // Recycle intermediate downsampled page bitmaps to prevent heap bloat
-            bitmaps.forEach { bmp ->
+            nonNullBitmaps.forEach { bmp ->
                 if (!bmp.isRecycled) {
                     bmp.recycle()
                 }
@@ -524,6 +532,25 @@ class ScannerRepository(
             cropBorderJson = "",
             enhanceModeId = 1
         )
+    }
+
+    suspend fun createCollagePages(
+        documentId: Long,
+        specs: List<CollagePageSpec>,
+        watermarkConfig: org.openscanner.cv.CollageWatermarkConfig? = null,
+        drawBorders: Boolean = false
+    ): List<Page> = withContext(Dispatchers.IO) {
+        specs.map { spec ->
+            createCollagePage(
+                documentId = documentId,
+                pageIds = spec.pageIds,
+                layout = spec.layout,
+                watermarkConfig = watermarkConfig,
+                slotTransforms = spec.slotTransforms,
+                drawBorders = drawBorders,
+                slotCustomPaths = spec.slotCustomPaths
+            )
+        }
     }
 
     suspend fun reorderPages(documentId: Long, orderedPages: List<Page>) = withContext(Dispatchers.IO) {
@@ -691,6 +718,122 @@ class ScannerRepository(
         pageDao.deletePage(page)
 
         val remaining = pageDao.getPagesListForDocument(page.documentId)
+        remaining.forEachIndexed { index, p ->
+            if (p.pageIndex != index) {
+                pageDao.updatePage(p.copy(pageIndex = index))
+            }
+        }
         documentDao.updatePageCount(page.documentId, remaining.size)
+        val doc = documentDao.getDocumentById(page.documentId)
+        if (doc != null) {
+            documentDao.updateDocument(doc.copy(modifiedTime = System.currentTimeMillis()))
+        }
+    }
+
+    suspend fun batchDeletePages(pages: List<Page>) = withContext(Dispatchers.IO) {
+        if (pages.isEmpty()) return@withContext
+        val docId = pages.first().documentId
+        pages.forEach { p ->
+            File(p.processedImagePath).delete()
+            File(p.originalImagePath).delete()
+            File(p.thumbnailPath).delete()
+            pageDao.deletePage(p)
+        }
+
+        val remaining = pageDao.getPagesListForDocument(docId)
+        remaining.forEachIndexed { index, p ->
+            if (p.pageIndex != index) {
+                pageDao.updatePage(p.copy(pageIndex = index))
+            }
+        }
+        documentDao.updatePageCount(docId, remaining.size)
+        val doc = documentDao.getDocumentById(docId)
+        if (doc != null) {
+            documentDao.updateDocument(doc.copy(modifiedTime = System.currentTimeMillis()))
+        }
+    }
+
+    suspend fun movePagesToDocument(pages: List<Page>, targetDocId: Long) = withContext(Dispatchers.IO) {
+        if (pages.isEmpty()) return@withContext
+        val sourceDocId = pages.first().documentId
+        val existingTargetPages = pageDao.getPagesListForDocument(targetDocId)
+
+        pages.forEachIndexed { index, p ->
+            pageDao.updatePage(
+                p.copy(
+                    documentId = targetDocId,
+                    pageIndex = existingTargetPages.size + index
+                )
+            )
+        }
+
+        // Re-index remaining pages in source document
+        val remainingSourcePages = pageDao.getPagesListForDocument(sourceDocId)
+        remainingSourcePages.forEachIndexed { index, p ->
+            if (p.pageIndex != index) {
+                pageDao.updatePage(p.copy(pageIndex = index))
+            }
+        }
+
+        documentDao.updatePageCount(sourceDocId, remainingSourcePages.size)
+        documentDao.updatePageCount(targetDocId, existingTargetPages.size + pages.size)
+
+        val sourceDoc = documentDao.getDocumentById(sourceDocId)
+        if (sourceDoc != null) {
+            documentDao.updateDocument(sourceDoc.copy(modifiedTime = System.currentTimeMillis()))
+        }
+        val targetDoc = documentDao.getDocumentById(targetDocId)
+        if (targetDoc != null) {
+            documentDao.updateDocument(targetDoc.copy(modifiedTime = System.currentTimeMillis()))
+        }
+    }
+
+    suspend fun copyPagesToDocument(pages: List<Page>, targetDocId: Long): List<Page> = withContext(Dispatchers.IO) {
+        if (pages.isEmpty()) return@withContext emptyList()
+        val scansDir = File(context.filesDir, "scans").apply { if (!exists()) mkdirs() }
+        val thumbsDir = File(context.filesDir, "thumbs").apply { if (!exists()) mkdirs() }
+        val existingTargetPages = pageDao.getPagesListForDocument(targetDocId)
+        val copiedPages = mutableListOf<Page>()
+
+        pages.forEachIndexed { index, p ->
+            val timestamp = System.currentTimeMillis() + index
+            val newProc = File(scansDir, "page_${targetDocId}_${timestamp}.jpg")
+            val newOrig = File(scansDir, "orig_${targetDocId}_${timestamp}.jpg")
+            val newThumb = File(thumbsDir, "thumb_${targetDocId}_${timestamp}.jpg")
+
+            val procFile = File(p.processedImagePath)
+            if (procFile.exists()) procFile.copyTo(newProc, overwrite = true)
+
+            val origFile = File(p.originalImagePath)
+            if (origFile.exists()) origFile.copyTo(newOrig, overwrite = true)
+
+            val thumbFile = File(p.thumbnailPath)
+            if (thumbFile.exists()) thumbFile.copyTo(newThumb, overwrite = true)
+
+            val newPage = Page(
+                documentId = targetDocId,
+                pageIndex = existingTargetPages.size + index,
+                processedImagePath = newProc.absolutePath,
+                originalImagePath = newOrig.absolutePath,
+                thumbnailPath = newThumb.absolutePath,
+                cropBorderJson = p.cropBorderJson,
+                enhanceMode = p.enhanceMode
+            )
+            val newId = pageDao.insertPage(newPage)
+            copiedPages.add(newPage.copy(id = newId))
+        }
+
+        documentDao.updatePageCount(targetDocId, existingTargetPages.size + pages.size)
+        val targetDoc = documentDao.getDocumentById(targetDocId)
+        if (targetDoc != null) {
+            documentDao.updateDocument(targetDoc.copy(modifiedTime = System.currentTimeMillis()))
+        }
+        copiedPages
+    }
+
+    suspend fun copyPagesWithinDocument(pages: List<Page>): List<Page> = withContext(Dispatchers.IO) {
+        if (pages.isEmpty()) return@withContext emptyList()
+        val docId = pages.first().documentId
+        copyPagesToDocument(pages, docId)
     }
 }

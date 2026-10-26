@@ -16,7 +16,8 @@ data class SlotTransform(
     val scale: Float = 1.0f,
     val panX: Float = 0.0f,
     val panY: Float = 0.0f,
-    val rotation: Float = 0.0f
+    val rotation: Float = 0.0f,
+    val zIndex: Float = 0.0f
 )
 
 /**
@@ -182,7 +183,7 @@ object CollageGenerator {
      * Generates a high-resolution A4 collage canvas combining multiple document page bitmaps.
      */
     fun createCollage(
-        bitmaps: List<Bitmap>,
+        bitmaps: List<Bitmap?>,
         layout: CollageLayout,
         canvasWidth: Int = A4_WIDTH_300DPI,
         canvasHeight: Int = A4_HEIGHT_300DPI,
@@ -209,8 +210,12 @@ object CollageGenerator {
         val slots = calculateSlotRects(layout, canvasWidth, canvasHeight)
 
         val count = minOf(layout.maxPages, minOf(slots.size, bitmaps.size))
-        for (i in 0 until count) {
-            drawBitmapFitted(canvas, bitmaps[i], slots[i], borderPaint, bitmapPaint, slotTransforms?.get(i))
+        val sortedIndices = (0 until count).sortedBy { slotTransforms?.get(it)?.zIndex ?: 0f }
+        for (i in sortedIndices) {
+            val bmp = bitmaps.getOrNull(i)
+            if (bmp != null) {
+                drawBitmapFitted(canvas, bmp, slots[i], borderPaint, bitmapPaint, slotTransforms?.get(i))
+            }
         }
 
         if (watermarkConfig != null && watermarkConfig.text.isNotBlank()) {
@@ -253,7 +258,8 @@ object CollageGenerator {
         val slots = calculateSlotRects(layout, canvasWidth, canvasHeight)
 
         val count = minOf(layout.maxPages, minOf(slots.size, filePaths.size))
-        for (i in 0 until count) {
+        val sortedIndices = (0 until count).sortedBy { slotTransforms?.get(it)?.zIndex ?: 0f }
+        for (i in sortedIndices) {
             val slotRect = slots[i]
             val slotW = slotRect.right - slotRect.left
             val slotH = slotRect.bottom - slotRect.top

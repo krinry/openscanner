@@ -63,6 +63,7 @@ fun ShareExportBottomSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .navigationBarsPadding()
                 .padding(bottom = 24.dp)
         ) {
             // Header

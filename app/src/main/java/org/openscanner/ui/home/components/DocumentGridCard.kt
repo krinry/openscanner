@@ -145,6 +145,20 @@ fun ScannerDocumentGridCard(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
+                        if (document.tags.contains("draft", ignoreCase = true) || document.title.startsWith("Draft", ignoreCase = true)) {
+                            Surface(
+                                color = Color(0xFFF59E0B),
+                                shape = RoundedCornerShape(4.dp)
+                            ) {
+                                Text(
+                                    text = "DRAFT",
+                                    color = Color.Black,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 8.sp,
+                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                )
+                            }
+                        }
                         Text(dateFormat.format(Date(document.modifiedTime)), color = colors.textSecondary, fontSize = 11.sp)
                         Text("${document.pageCount} P", color = colors.primary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }

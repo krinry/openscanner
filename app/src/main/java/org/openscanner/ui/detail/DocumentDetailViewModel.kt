@@ -48,6 +48,18 @@ class DocumentDetailViewModel(application: Application) : AndroidViewModel(appli
     private val _isGeneratingPdf = MutableStateFlow(false)
     val isGeneratingPdf: StateFlow<Boolean> = _isGeneratingPdf
 
+    private val _allDocuments = MutableStateFlow<List<Document>>(emptyList())
+    val allDocuments: StateFlow<List<Document>> = _allDocuments
+
+    private val _selectedPageIds = MutableStateFlow<Set<Long>>(emptySet())
+    val selectedPageIds: StateFlow<Set<Long>> = _selectedPageIds
+
+    private val _isSelectMode = MutableStateFlow(false)
+    val isSelectMode: StateFlow<Boolean> = _isSelectMode
+
+    private val _isReorderMode = MutableStateFlow(false)
+    val isReorderMode: StateFlow<Boolean> = _isReorderMode
+
     fun load(docId: Long) {
         viewModelScope.launch {
             _document.value = repository.getDocumentById(docId)
@@ -58,6 +70,134 @@ class DocumentDetailViewModel(application: Application) : AndroidViewModel(appli
         viewModelScope.launch {
             repository.getAllFolders().collectLatest { folderList ->
                 _folders.value = folderList
+            }
+        }
+        viewModelScope.launch {
+            repository.getAllDocuments().collectLatest { docList ->
+                _allDocuments.value = docList
+            }
+        }
+    }
+
+    fun toggleSelectPage(pageId: Long) {
+        val current = _selectedPageIds.value
+        if (current.contains(pageId)) {
+            val next = current - pageId
+            _selectedPageIds.value = next
+            if (next.isEmpty()) {
+                _isSelectMode.value = false
+            }
+        } else {
+            _selectedPageIds.value = current + pageId
+            _isSelectMode.value = true
+        }
+    }
+
+    fun selectAllPages() {
+        _selectedPageIds.value = _pages.value.map { it.id }.toSet()
+        _isSelectMode.value = true
+    }
+
+    fun clearSelection() {
+        _selectedPageIds.value = emptySet()
+        _isSelectMode.value = false
+    }
+
+    fun setSelectMode(enabled: Boolean) {
+        _isSelectMode.value = enabled
+        if (!enabled) {
+            _selectedPageIds.value = emptySet()
+        }
+    }
+
+    fun setReorderMode(enabled: Boolean) {
+        _isReorderMode.value = enabled
+        if (enabled) {
+            clearSelection()
+        }
+    }
+
+    fun movePage(fromIndex: Int, toIndex: Int) {
+        val current = _pages.value.toMutableList()
+        if (fromIndex in current.indices && toIndex in current.indices && fromIndex != toIndex) {
+            val item = current.removeAt(fromIndex)
+            current.add(toIndex, item)
+            _pages.value = current
+            reorderPages(current)
+        }
+    }
+
+    fun batchDeleteSelectedPages(onComplete: () -> Unit) {
+        val selected = _pages.value.filter { it.id in _selectedPageIds.value }
+        if (selected.isEmpty()) return
+        viewModelScope.launch {
+            repository.batchDeletePages(selected)
+            withContext(Dispatchers.Main) {
+                clearSelection()
+                onComplete()
+            }
+        }
+    }
+
+    fun moveSelectedPages(targetDocId: Long, onComplete: () -> Unit) {
+        val selected = _pages.value.filter { it.id in _selectedPageIds.value }
+        if (selected.isEmpty()) return
+        viewModelScope.launch {
+            repository.movePagesToDocument(selected, targetDocId)
+            withContext(Dispatchers.Main) {
+                clearSelection()
+                onComplete()
+            }
+        }
+    }
+
+    fun copySelectedPages(targetDocId: Long, onComplete: () -> Unit) {
+        val selected = _pages.value.filter { it.id in _selectedPageIds.value }
+        if (selected.isEmpty()) return
+        viewModelScope.launch {
+            repository.copyPagesToDocument(selected, targetDocId)
+            withContext(Dispatchers.Main) {
+                clearSelection()
+                onComplete()
+            }
+        }
+    }
+
+    fun createDocAndMoveSelectedPages(newDocTitle: String, onComplete: (Long) -> Unit) {
+        val selected = _pages.value.filter { it.id in _selectedPageIds.value }
+        if (selected.isEmpty()) return
+        viewModelScope.launch {
+            val newDocId = repository.createNewDocument(newDocTitle)
+            repository.movePagesToDocument(selected, newDocId)
+            withContext(Dispatchers.Main) {
+                clearSelection()
+                onComplete(newDocId)
+            }
+        }
+    }
+
+    fun createDocAndCopySelectedPages(newDocTitle: String, onComplete: (Long) -> Unit) {
+        val selected = _pages.value.filter { it.id in _selectedPageIds.value }
+        if (selected.isEmpty()) return
+        viewModelScope.launch {
+            val newDocId = repository.createNewDocument(newDocTitle)
+            repository.copyPagesToDocument(selected, newDocId)
+            withContext(Dispatchers.Main) {
+                clearSelection()
+                onComplete(newDocId)
+            }
+        }
+    }
+
+    fun copySelectedPagesWithinCurrentDoc(onComplete: () -> Unit) {
+        val selected = _pages.value.filter { it.id in _selectedPageIds.value }
+        if (selected.isEmpty()) return
+        val docId = _document.value?.id ?: return
+        viewModelScope.launch {
+            repository.copyPagesToDocument(selected, docId)
+            withContext(Dispatchers.Main) {
+                clearSelection()
+                onComplete()
             }
         }
     }
@@ -138,6 +278,35 @@ class DocumentDetailViewModel(application: Application) : AndroidViewModel(appli
         }
     }
 
+    fun createMultiPageCollage(
+        specs: List<org.openscanner.data.repository.CollagePageSpec>,
+        watermarkConfig: org.openscanner.cv.CollageWatermarkConfig? = null,
+        drawBorders: Boolean = false,
+        onDone: () -> Unit
+    ) {
+        val docId = _document.value?.id ?: return
+        viewModelScope.launch {
+            _isGeneratingPdf.value = true
+            try {
+                repository.createCollagePages(
+                    documentId = docId,
+                    specs = specs,
+                    watermarkConfig = watermarkConfig,
+                    drawBorders = drawBorders
+                )
+                withContext(Dispatchers.Main) {
+                    _isGeneratingPdf.value = false
+                    onDone()
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    _isGeneratingPdf.value = false
+                }
+                e.printStackTrace()
+            }
+        }
+    }
+
     fun stampSignature(
         pageId: Long,
         signatureBitmap: android.graphics.Bitmap,
@@ -159,8 +328,8 @@ class DocumentDetailViewModel(application: Application) : AndroidViewModel(appli
         }
     }
 
-    fun shareAsImages(context: Context) {
-        val currentPages = _pages.value
+    fun shareAsImages(context: Context, customPages: List<Page>? = null) {
+        val currentPages = customPages ?: _pages.value
         if (currentPages.isEmpty()) {
             Toast.makeText(context, "No pages to share", Toast.LENGTH_SHORT).show()
             return
@@ -193,9 +362,9 @@ class DocumentDetailViewModel(application: Application) : AndroidViewModel(appli
         }
     }
 
-    fun exportAndSharePdf(context: Context, options: PdfExportOptions) {
+    fun exportAndSharePdf(context: Context, options: PdfExportOptions, customPages: List<Page>? = null) {
         val currentDoc = _document.value ?: return
-        val currentPages = _pages.value
+        val currentPages = customPages ?: _pages.value
         if (currentPages.isEmpty()) {
             Toast.makeText(context, "No pages to export", Toast.LENGTH_SHORT).show()
             return
@@ -236,9 +405,9 @@ class DocumentDetailViewModel(application: Application) : AndroidViewModel(appli
         }
     }
 
-    fun savePdfToDownloads(context: Context, options: PdfExportOptions) {
+    fun savePdfToDownloads(context: Context, options: PdfExportOptions, customPages: List<Page>? = null) {
         val currentDoc = _document.value ?: return
-        val currentPages = _pages.value
+        val currentPages = customPages ?: _pages.value
         if (currentPages.isEmpty()) {
             Toast.makeText(context, "No pages to export", Toast.LENGTH_SHORT).show()
             return
@@ -301,8 +470,8 @@ class DocumentDetailViewModel(application: Application) : AndroidViewModel(appli
         }
     }
 
-    fun shareLongImage(context: Context) {
-        val currentPages = _pages.value
+    fun shareLongImage(context: Context, customPages: List<Page>? = null) {
+        val currentPages = customPages ?: _pages.value
         if (currentPages.isEmpty()) {
             Toast.makeText(context, "No pages to share", Toast.LENGTH_SHORT).show()
             return

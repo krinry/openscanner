@@ -21,6 +21,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowBackIos
 import androidx.compose.material.icons.automirrored.filled.ArrowForwardIos
 import androidx.compose.material.icons.automirrored.filled.RotateLeft
+import androidx.compose.material.icons.automirrored.filled.RotateRight
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.outlined.AddBox
 import androidx.compose.material.icons.outlined.Cameraswitch
@@ -281,6 +282,7 @@ fun BatchReviewScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(Color(0xFF0E0E0E))
+                    .navigationBarsPadding()
             ) {
                 // 1. "Apply to all pages" Switch Row
                 Row(
@@ -421,7 +423,7 @@ fun BatchReviewScreen(
 
                 HorizontalDivider(color = Color(0xFF1E1E1E), thickness = 0.5.dp)
 
-                // 3. Bottom Actions Toolbar (Retake, Add, Left, Crop, Delete)
+                // 3. Bottom Actions Toolbar (Retake, Add, Left, Right, Crop)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -461,18 +463,22 @@ fun BatchReviewScreen(
                     )
 
                     BatchActionButton(
-                        icon = Icons.Outlined.Crop,
-                        label = "Crop",
+                        icon = Icons.AutoMirrored.Filled.RotateRight,
+                        label = "Right",
                         onClick = {
-                            cropEditingItem = currentItem
+                            currentItem?.let { item ->
+                                warpedBaseCache = warpedBaseCache - item.id
+                                previewDisplayCache = previewDisplayCache - item.id
+                                onRotateItem(item.id, true)
+                            }
                         }
                     )
 
                     BatchActionButton(
-                        icon = Icons.Outlined.Delete,
-                        label = "Delete",
+                        icon = Icons.Outlined.Crop,
+                        label = "Crop",
                         onClick = {
-                            showDeleteConfirmDialog = true
+                            cropEditingItem = currentItem
                         }
                     )
                 }

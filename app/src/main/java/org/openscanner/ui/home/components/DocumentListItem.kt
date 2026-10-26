@@ -138,11 +138,30 @@ fun ScannerDocumentListItem(
                 lineHeight = 20.sp
             )
             Spacer(modifier = Modifier.height(6.dp))
-            Text(
-                text = dateFormat.format(Date(document.modifiedTime)),
-                color = colors.textSecondary,
-                fontSize = 12.sp
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                if (document.tags.contains("draft", ignoreCase = true) || document.title.startsWith("Draft", ignoreCase = true)) {
+                    Surface(
+                        color = Color(0xFFF59E0B),
+                        shape = RoundedCornerShape(4.dp)
+                    ) {
+                        Text(
+                            text = "DRAFT",
+                            color = Color.Black,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 8.sp,
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                        )
+                    }
+                }
+                Text(
+                    text = dateFormat.format(Date(document.modifiedTime)),
+                    color = colors.textSecondary,
+                    fontSize = 12.sp
+                )
+            }
             Spacer(modifier = Modifier.height(4.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
