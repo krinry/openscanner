@@ -18,5 +18,9 @@ sealed class Screen(val route: String) {
     object PageViewer : Screen("viewer/{pageId}") {
         fun createRoute(pageId: Long): String = "viewer/$pageId"
     }
+    object EditPdf : Screen("edit_pdf/{docId}?initialPageIndex={initialPageIndex}") {
+        fun createRoute(docId: Long, initialPageIndex: Int = 0): String =
+            "edit_pdf/$docId?initialPageIndex=$initialPageIndex"
+    }
     object Profile : Screen("profile")
 }

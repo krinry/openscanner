@@ -45,6 +45,7 @@ fun HomeScreen(
     onNavigateToCamera: (docId: Long, mode: String) -> Unit,
     onNavigateToDetail: (docId: Long) -> Unit,
     onNavigateToProfile: () -> Unit = {},
+    onNavigateToEditPdf: (docId: Long, initialPageIndex: Int) -> Unit = { _, _ -> },
     viewModel: HomeViewModel = viewModel()
 ) {
     val context = LocalContext.current
@@ -72,6 +73,9 @@ fun HomeScreen(
     var showBatchPdfDialog by remember { mutableStateOf(false) }
     var showImportDialog by remember { mutableStateOf(false) }
     var isImporting by remember { mutableStateOf(false) }
+    var docToDelete by remember { mutableStateOf<Document?>(null) }
+    var folderToDelete by remember { mutableStateOf<Folder?>(null) }
+    var showBatchDeleteConfirm by remember { mutableStateOf(false) }
 
     // System Back button navigation
     BackHandler(enabled = isSelectMode || isSearchExpanded || selectedFolder != null) {
@@ -168,7 +172,7 @@ fun HomeScreen(
                         }
                     },
                     onMerge = { showMergeDialog = true },
-                    onDeleteSelected = { viewModel.batchDeleteSelected() },
+                    onDeleteSelected = { showBatchDeleteConfirm = true },
                     onMore = { showMoreMenu = true }
                 )
             } else {
@@ -200,20 +204,20 @@ fun HomeScreen(
                     },
                     onPdfWatermark = {
                         val firstDoc = documents.firstOrNull()
-                        if (firstDoc != null) onNavigateToDetail(firstDoc.id)
-                        else Toast.makeText(context, "Scan or import documents first to add watermark", Toast.LENGTH_SHORT).show()
+                        if (firstDoc != null) onNavigateToEditPdf(firstDoc.id, 0)
+                        else Toast.makeText(context, "Scan or import documents first to edit PDF watermark", Toast.LENGTH_SHORT).show()
                     },
                     onPdfMerge = { showBatchPdfDialog = true },
                     onPdfCompression = {
                         val firstDoc = documents.firstOrNull()
-                        if (firstDoc != null) onNavigateToDetail(firstDoc.id)
-                        else Toast.makeText(context, "Scan or import documents first to compress", Toast.LENGTH_SHORT).show()
+                        if (firstDoc != null) onNavigateToEditPdf(firstDoc.id, 0)
+                        else Toast.makeText(context, "Scan or import documents first to edit PDF compression", Toast.LENGTH_SHORT).show()
                     },
                     onPdfSignature = { onNavigateToCamera(-1L, "Signature") },
                     onPdfPassword = {
                         val firstDoc = documents.firstOrNull()
-                        if (firstDoc != null) onNavigateToDetail(firstDoc.id)
-                        else Toast.makeText(context, "Scan or import documents first to protect with password", Toast.LENGTH_SHORT).show()
+                        if (firstDoc != null) onNavigateToEditPdf(firstDoc.id, 0)
+                        else Toast.makeText(context, "Scan or import documents first to protect PDF with password", Toast.LENGTH_SHORT).show()
                     },
                     onPageReorder = {
                         val firstDoc = documents.firstOrNull()
@@ -307,7 +311,7 @@ fun HomeScreen(
                                         isInsideFolder = selectedFolder != null,
                                         onSelectFolder = { viewModel.selectFolder(it) },
                                         onRenameFolder = { folderToRename = it },
-                                        onDeleteFolder = { viewModel.deleteFolder(it) },
+                                        onDeleteFolder = { folderToDelete = it },
                                         onCreateFolderClick = { showNewFolderDialog = true }
                                     )
                                 }
@@ -329,7 +333,7 @@ fun HomeScreen(
                                     onLongClick = {
                                         viewModel.toggleSelectDoc(doc.id)
                                     },
-                                    onDelete = { viewModel.deleteDocument(doc) },
+                                    onDelete = { docToDelete = doc },
                                     onRename = { docToRename = doc },
                                     onMoveToFolder = { docToMove = doc }
                                 )
@@ -350,7 +354,7 @@ fun HomeScreen(
                                         isInsideFolder = selectedFolder != null,
                                         onSelectFolder = { viewModel.selectFolder(it) },
                                         onRenameFolder = { folderToRename = it },
-                                        onDeleteFolder = { viewModel.deleteFolder(it) },
+                                        onDeleteFolder = { folderToDelete = it },
                                         onCreateFolderClick = { showNewFolderDialog = true }
                                     )
                                     Spacer(modifier = Modifier.height(10.dp))
@@ -374,7 +378,7 @@ fun HomeScreen(
                                         viewModel.toggleSelectDoc(doc.id)
                                     },
                                     onSelectToggle = { viewModel.toggleSelectDoc(doc.id) },
-                                    onDelete = { viewModel.deleteDocument(doc) },
+                                    onDelete = { docToDelete = doc },
                                     onRename = { docToRename = doc },
                                     onMoveToFolder = { docToMove = doc }
                                 )
@@ -563,6 +567,112 @@ fun HomeScreen(
             confirmButton = {},
             dismissButton = {
                 TextButton(onClick = { showImportDialog = false }) {
+                    Text("Cancel", color = colors.textSecondary)
+                }
+            },
+            containerColor = colors.surface
+        )
+    }
+
+    docToDelete?.let { doc ->
+        AlertDialog(
+            onDismissRequest = { docToDelete = null },
+            title = {
+                Text("Delete Document?", color = colors.textPrimary, fontWeight = FontWeight.Bold)
+            },
+            text = {
+                Text(
+                    "Are you sure you want to delete \"${doc.title}\"? All pages in this document will be permanently removed.",
+                    color = colors.textSecondary
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val title = doc.title
+                        viewModel.deleteDocument(doc)
+                        docToDelete = null
+                        Toast.makeText(context, "Deleted \"$title\"", Toast.LENGTH_SHORT).show()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEE3F3F))
+                ) {
+                    Text("Delete", color = Color.White, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { docToDelete = null }) {
+                    Text("Cancel", color = colors.textSecondary)
+                }
+            },
+            containerColor = colors.surface
+        )
+    }
+
+    folderToDelete?.let { folder ->
+        AlertDialog(
+            onDismissRequest = { folderToDelete = null },
+            title = {
+                Text("Delete Folder?", color = colors.textPrimary, fontWeight = FontWeight.Bold)
+            },
+            text = {
+                Text(
+                    "Are you sure you want to delete folder \"${folder.name}\"?",
+                    color = colors.textSecondary
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val name = folder.name
+                        viewModel.deleteFolder(folder)
+                        folderToDelete = null
+                        Toast.makeText(context, "Deleted folder \"$name\"", Toast.LENGTH_SHORT).show()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEE3F3F))
+                ) {
+                    Text("Delete", color = Color.White, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { folderToDelete = null }) {
+                    Text("Cancel", color = colors.textSecondary)
+                }
+            },
+            containerColor = colors.surface
+        )
+    }
+
+    if (showBatchDeleteConfirm) {
+        val count = selectedDocIds.size
+        AlertDialog(
+            onDismissRequest = { showBatchDeleteConfirm = false },
+            title = {
+                Text(
+                    "Delete $count Document${if (count > 1) "s" else ""}?",
+                    color = colors.textPrimary,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Text(
+                    "Are you sure you want to delete $count selected document${if (count > 1) "s" else ""}? This action cannot be undone.",
+                    color = colors.textSecondary
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showBatchDeleteConfirm = false
+                        viewModel.batchDeleteSelected()
+                        Toast.makeText(context, "Deleted $count document(s)", Toast.LENGTH_SHORT).show()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEE3F3F))
+                ) {
+                    Text("Delete", color = Color.White, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showBatchDeleteConfirm = false }) {
                     Text("Cancel", color = colors.textSecondary)
                 }
             },

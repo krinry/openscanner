@@ -26,6 +26,7 @@ import org.openscanner.ui.navigation.Screen
 import org.openscanner.ui.theme.OpenScannerTheme
 import org.openscanner.ui.theme.ThemeManager
 import org.openscanner.ui.viewer.PageViewerScreen
+import org.openscanner.ui.pdf.EditPdfScreen
 import org.openscanner.ui.profile.ProfileScreen
 
 class MainActivity : ComponentActivity() {
@@ -65,6 +66,9 @@ class MainActivity : ComponentActivity() {
                                 },
                                 onNavigateToProfile = {
                                     navController.navigate(Screen.Profile.route)
+                                },
+                                onNavigateToEditPdf = { docId, pageIndex ->
+                                    navController.navigate(Screen.EditPdf.createRoute(docId, pageIndex))
                                 }
                             )
                         }
@@ -147,6 +151,9 @@ class MainActivity : ComponentActivity() {
                                 },
                                 onNavigateToViewer = { pageId ->
                                     navController.navigate(Screen.PageViewer.createRoute(pageId))
+                                },
+                                onNavigateToEditPdf = { dId, pageIdx ->
+                                    navController.navigate(Screen.EditPdf.createRoute(dId, pageIdx))
                                 }
                             )
                         }
@@ -158,6 +165,22 @@ class MainActivity : ComponentActivity() {
                             val pageId = backStackEntry.arguments?.getLong("pageId") ?: -1L
                             PageViewerScreen(
                                 pageId = pageId,
+                                onNavigateBack = { navController.popBackStack() }
+                            )
+                        }
+
+                        composable(
+                            route = Screen.EditPdf.route,
+                            arguments = listOf(
+                                navArgument("docId") { type = NavType.LongType },
+                                navArgument("initialPageIndex") { type = NavType.IntType; defaultValue = 0 }
+                            )
+                        ) { backStackEntry ->
+                            val docId = backStackEntry.arguments?.getLong("docId") ?: -1L
+                            val initialPageIndex = backStackEntry.arguments?.getInt("initialPageIndex") ?: 0
+                            EditPdfScreen(
+                                docId = docId,
+                                initialPageIndex = initialPageIndex,
                                 onNavigateBack = { navController.popBackStack() }
                             )
                         }

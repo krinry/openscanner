@@ -127,6 +127,31 @@ class DocumentDetailViewModel(application: Application) : AndroidViewModel(appli
         }
     }
 
+    fun movePageToPosition(pageId: Long, targetPosition1Based: Int) {
+        val current = _pages.value.toMutableList()
+        val fromIndex = current.indexOfFirst { it.id == pageId }
+        val toIndex = (targetPosition1Based - 1).coerceIn(0, current.size - 1)
+        if (fromIndex != -1 && fromIndex != toIndex) {
+            val item = current.removeAt(fromIndex)
+            current.add(toIndex, item)
+            _pages.value = current
+            reorderPages(current)
+        }
+    }
+
+    fun movePagesToPosition(pageIds: Set<Long>, targetPosition1Based: Int) {
+        val current = _pages.value.toMutableList()
+        val targetIndex = (targetPosition1Based - 1).coerceIn(0, current.size - 1)
+        val pagesToMove = current.filter { it.id in pageIds }
+        if (pagesToMove.isEmpty()) return
+
+        current.removeAll(pagesToMove)
+        val insertAt = targetIndex.coerceIn(0, current.size)
+        current.addAll(insertAt, pagesToMove)
+        _pages.value = current
+        reorderPages(current)
+    }
+
     fun batchDeleteSelectedPages(onComplete: () -> Unit) {
         val selected = _pages.value.filter { it.id in _selectedPageIds.value }
         if (selected.isEmpty()) return

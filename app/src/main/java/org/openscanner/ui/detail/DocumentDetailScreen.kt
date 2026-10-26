@@ -2,12 +2,13 @@ package org.openscanner.ui.detail
 
 import android.content.Intent
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -36,12 +37,17 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.openscanner.cv.OcrEngine
 import org.openscanner.data.model.FolderWithCount
+import org.openscanner.data.model.Page
 import org.openscanner.ui.detail.components.DetailBottomBar
 import org.openscanner.ui.detail.components.DetailTopBar
 import org.openscanner.ui.detail.components.PageGridCard
+import org.openscanner.ui.detail.components.PageSelectionBottomBar
 import org.openscanner.ui.detail.dialogs.CollageStudioDialog
 import org.openscanner.ui.detail.dialogs.DocumentMoreDialog
+import org.openscanner.ui.detail.dialogs.MoveCopyPagesDialog
+import org.openscanner.ui.detail.dialogs.MoveToPositionDialog
 import org.openscanner.ui.detail.dialogs.ShareExportBottomSheet
+import org.openscanner.ui.home.dialogs.MoveCopyAction
 import org.openscanner.ui.pdf.PdfExportDialog
 import org.openscanner.ui.signature.SignatureDialog
 import org.openscanner.ui.theme.ScannerTheme
@@ -53,6 +59,7 @@ fun DocumentDetailScreen(
     onNavigateBack: () -> Unit,
     onNavigateToCamera: (docId: Long) -> Unit,
     onNavigateToViewer: (pageId: Long) -> Unit,
+    onNavigateToEditPdf: (docId: Long, initialPageIndex: Int) -> Unit = { _, _ -> },
     viewModel: DocumentDetailViewModel = viewModel()
 ) {
     val context = LocalContext.current
@@ -66,11 +73,20 @@ fun DocumentDetailScreen(
     val document by viewModel.document.collectAsState()
     val pages by viewModel.pages.collectAsState()
     val folders by viewModel.folders.collectAsState()
+    val allDocuments by viewModel.allDocuments.collectAsState()
     val isGeneratingPdf by viewModel.isGeneratingPdf.collectAsState()
+    val selectedPageIds by viewModel.selectedPageIds.collectAsState()
+    val isSelectMode by viewModel.isSelectMode.collectAsState()
+    val isReorderMode by viewModel.isReorderMode.collectAsState()
 
     var showPdfDialog by remember { mutableStateOf(false) }
     var showRenameDialog by remember { mutableStateOf(false) }
     var showDeleteConfirmDialog by remember { mutableStateOf(false) }
+    var showDeleteSelectedPagesDialog by remember { mutableStateOf(false) }
+    var showMovePagesDialog by remember { mutableStateOf(false) }
+    var showCopyPagesDialog by remember { mutableStateOf(false) }
+    var pageToMovePosition by remember { mutableStateOf<Page?>(null) }
+    var showBatchMovePositionDialog by remember { mutableStateOf(false) }
     var showSignatureDialog by remember { mutableStateOf(false) }
     var capturedSignatureBitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
     var showCollageDialog by remember { mutableStateOf(false) }
@@ -81,6 +97,24 @@ fun DocumentDetailScreen(
     var extractedOcrText by remember { mutableStateOf("") }
     var isOcrExtracting by remember { mutableStateOf(false) }
     var renameText by remember { mutableStateOf("") }
+
+    // Intercept back button when in select mode or reorder mode
+    BackHandler(enabled = isSelectMode || isReorderMode) {
+        if (isSelectMode) {
+            viewModel.clearSelection()
+        } else if (isReorderMode) {
+            viewModel.setReorderMode(false)
+        }
+    }
+
+    // Pages targeted for export/sharing (selected pages if selection active, else all pages)
+    val pagesToShare = remember(pages, selectedPageIds, isSelectMode) {
+        if (isSelectMode && selectedPageIds.isNotEmpty()) {
+            pages.filter { it.id in selectedPageIds }
+        } else {
+            pages
+        }
+    }
 
     Scaffold(
         containerColor = colors.background,
@@ -98,11 +132,54 @@ fun DocumentDetailScreen(
                     } else {
                         Toast.makeText(context, "No pages to export", Toast.LENGTH_SHORT).show()
                     }
-                }
+                },
+                isSelectMode = isSelectMode,
+                selectedCount = selectedPageIds.size,
+                totalCount = pages.size,
+                onClearSelection = { viewModel.clearSelection() },
+                onSelectAll = {
+                    if (selectedPageIds.size == pages.size && pages.isNotEmpty()) {
+                        viewModel.clearSelection()
+                    } else {
+                        viewModel.selectAllPages()
+                    }
+                },
+                isReorderMode = isReorderMode,
+                onToggleReorderMode = { viewModel.setReorderMode(!isReorderMode) },
+                onEnterSelectMode = { viewModel.setSelectMode(true) }
             )
         },
         bottomBar = {
-            Box {
+            if (isSelectMode) {
+                PageSelectionBottomBar(
+                    selectedCount = selectedPageIds.size,
+                    onShare = {
+                        if (selectedPageIds.isNotEmpty()) {
+                            showShareExportSheet = true
+                        }
+                    },
+                    onMove = {
+                        if (selectedPageIds.isNotEmpty()) {
+                            showMovePagesDialog = true
+                        }
+                    },
+                    onCopy = {
+                        if (selectedPageIds.isNotEmpty()) {
+                            showCopyPagesDialog = true
+                        }
+                    },
+                    onSetPosition = {
+                        if (selectedPageIds.isNotEmpty()) {
+                            showBatchMovePositionDialog = true
+                        }
+                    },
+                    onDelete = {
+                        if (selectedPageIds.isNotEmpty()) {
+                            showDeleteSelectedPagesDialog = true
+                        }
+                    }
+                )
+            } else if (!isReorderMode) {
                 DetailBottomBar(
                     onAddClick = { onNavigateToCamera(docId) },
                     onCollageClick = {
@@ -121,7 +198,7 @@ fun DocumentDetailScreen(
                     },
                     onEditPdfClick = {
                         if (pages.isNotEmpty()) {
-                            showPdfDialog = true
+                            onNavigateToEditPdf(docId, 0)
                         } else {
                             Toast.makeText(context, "Add pages to edit PDF", Toast.LENGTH_SHORT).show()
                         }
@@ -178,7 +255,7 @@ fun DocumentDetailScreen(
                     }
                 }
             } else {
-                // 2-column page grid
+                // 2-column page grid with long-press multi-select & drag/align support
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(2),
                     contentPadding = PaddingValues(16.dp),
@@ -186,10 +263,27 @@ fun DocumentDetailScreen(
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                     modifier = Modifier.fillMaxSize()
                 ) {
-                    items(pages, key = { it.id }) { page ->
+                    itemsIndexed(pages, key = { _, page -> page.id }) { pageIndex, page ->
                         PageGridCard(
                             page = page,
-                            onClick = { onNavigateToViewer(page.id) }
+                            isSelected = selectedPageIds.contains(page.id),
+                            isSelectMode = isSelectMode,
+                            isReorderMode = isReorderMode,
+                            canMoveLeft = pageIndex > 0,
+                            canMoveRight = pageIndex < pages.size - 1,
+                            onMoveLeft = { viewModel.movePage(pageIndex, pageIndex - 1) },
+                            onMoveRight = { viewModel.movePage(pageIndex, pageIndex + 1) },
+                            onPageNumberClick = { pageToMovePosition = page },
+                            onClick = {
+                                if (isSelectMode) {
+                                    viewModel.toggleSelectPage(page.id)
+                                } else {
+                                    onNavigateToViewer(page.id)
+                                }
+                            },
+                            onLongClick = {
+                                viewModel.toggleSelectPage(page.id)
+                            }
                         )
                     }
                 }
@@ -284,6 +378,122 @@ fun DocumentDetailScreen(
         )
     }
 
+    // Confirmation dialog for deleting selected pages
+    if (showDeleteSelectedPagesDialog) {
+        val count = selectedPageIds.size
+        AlertDialog(
+            onDismissRequest = { showDeleteSelectedPagesDialog = false },
+            title = {
+                Text(
+                    "Delete $count Page${if (count > 1) "s" else ""}?",
+                    color = colors.textPrimary,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Text(
+                    "Are you sure you want to delete $count selected page${if (count > 1) "s" else ""}? This action cannot be undone.",
+                    color = colors.textSecondary
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showDeleteSelectedPagesDialog = false
+                        viewModel.batchDeleteSelectedPages {
+                            Toast.makeText(context, "Deleted $count page(s)", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEE3F3F))
+                ) {
+                    Text("Delete", color = Color.White, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteSelectedPagesDialog = false }) {
+                    Text("Cancel", color = colors.textSecondary)
+                }
+            },
+            containerColor = colors.surface
+        )
+    }
+
+    val pageToMove = pageToMovePosition
+    if (pageToMove != null) {
+        MoveToPositionDialog(
+            currentPosition1Based = pageToMove.pageIndex + 1,
+            totalPages = pages.size,
+            onDismiss = { pageToMovePosition = null },
+            onConfirm = { targetPos ->
+                viewModel.movePageToPosition(pageToMove.id, targetPos)
+                pageToMovePosition = null
+                Toast.makeText(context, "Moved Page ${pageToMove.pageIndex + 1} to Page $targetPos", Toast.LENGTH_SHORT).show()
+            }
+        )
+    }
+
+    if (showBatchMovePositionDialog) {
+        MoveToPositionDialog(
+            currentPosition1Based = 1,
+            totalPages = pages.size,
+            selectedPageCount = selectedPageIds.size,
+            onDismiss = { showBatchMovePositionDialog = false },
+            onConfirm = { targetPos ->
+                viewModel.movePagesToPosition(selectedPageIds, targetPos)
+                showBatchMovePositionDialog = false
+                Toast.makeText(context, "Moved ${selectedPageIds.size} page(s) to position $targetPos", Toast.LENGTH_SHORT).show()
+            }
+        )
+    }
+
+    // Move or Copy Pages Dialog
+    if (showMovePagesDialog || showCopyPagesDialog) {
+        val action = if (showMovePagesDialog) MoveCopyAction.MOVE else MoveCopyAction.COPY
+        val count = selectedPageIds.size
+        MoveCopyPagesDialog(
+            pageCount = count,
+            currentDocId = docId,
+            documents = allDocuments,
+            initialAction = action,
+            onDismiss = {
+                showMovePagesDialog = false
+                showCopyPagesDialog = false
+            },
+            onDuplicateInCurrentDoc = {
+                showCopyPagesDialog = false
+                viewModel.copySelectedPagesWithinCurrentDoc {
+                    Toast.makeText(context, "Duplicated $count page(s)", Toast.LENGTH_SHORT).show()
+                }
+            },
+            onCreateNewDocAndConfirm = { act, newTitle ->
+                showMovePagesDialog = false
+                showCopyPagesDialog = false
+                if (act == MoveCopyAction.MOVE) {
+                    viewModel.createDocAndMoveSelectedPages(newTitle) {
+                        Toast.makeText(context, "Moved $count page(s) to '$newTitle'", Toast.LENGTH_SHORT).show()
+                    }
+                } else {
+                    viewModel.createDocAndCopySelectedPages(newTitle) {
+                        Toast.makeText(context, "Copied $count page(s) to '$newTitle'", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            },
+            onConfirmTargetDoc = { act, targetDocId, targetDocTitle ->
+                showMovePagesDialog = false
+                showCopyPagesDialog = false
+                if (act == MoveCopyAction.MOVE) {
+                    viewModel.moveSelectedPages(targetDocId) {
+                        Toast.makeText(context, "Moved $count page(s) to '$targetDocTitle'", Toast.LENGTH_SHORT).show()
+                    }
+                } else {
+                    viewModel.copySelectedPages(targetDocId) {
+                        Toast.makeText(context, "Copied $count page(s) to '$targetDocTitle'", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+        )
+    }
+
     if (showMoveFolderDialog) {
         AlertDialog(
             onDismissRequest = { showMoveFolderDialog = false },
@@ -337,11 +547,11 @@ fun DocumentDetailScreen(
         PdfExportDialog(
             onDismiss = { showPdfDialog = false },
             onSaveToDownloads = { options ->
-                viewModel.savePdfToDownloads(context, options)
+                viewModel.savePdfToDownloads(context, options, pagesToShare)
                 showPdfDialog = false
             },
             onShare = { options ->
-                viewModel.exportAndSharePdf(context, options)
+                viewModel.exportAndSharePdf(context, options, pagesToShare)
                 showPdfDialog = false
             }
         )
@@ -392,16 +602,25 @@ fun DocumentDetailScreen(
 
     if (showShareExportSheet) {
         ShareExportBottomSheet(
-            pages = pages,
+            pages = pagesToShare,
             onDismiss = { showShareExportSheet = false },
-            onSharePdf = { showPdfDialog = true },
-            onShareJpg = { viewModel.shareAsImages(context) },
-            onShareLongImage = { viewModel.shareLongImage(context) },
+            onSharePdf = {
+                showPdfDialog = true
+            },
+            onShareJpg = {
+                viewModel.shareAsImages(context, pagesToShare)
+                showShareExportSheet = false
+            },
+            onShareLongImage = {
+                viewModel.shareLongImage(context, pagesToShare)
+                showShareExportSheet = false
+            },
             onExtractText = {
                 isOcrExtracting = true
+                showShareExportSheet = false
                 coroutineScope.launch(Dispatchers.IO) {
                     val fullText = StringBuilder()
-                    for (p in pages) {
+                    for (p in pagesToShare) {
                         val bmp = BitmapFactory.decodeFile(p.processedImagePath)
                         if (bmp != null) {
                             try {
@@ -424,10 +643,17 @@ fun DocumentDetailScreen(
                 }
             },
             onSplitPdf = {
+                showShareExportSheet = false
                 Toast.makeText(context, "Pages are managed independently in OpenScanner.", Toast.LENGTH_SHORT).show()
             },
-            onSaveToGallery = { viewModel.savePagesToGallery(context) },
-            onEmailToMyself = { viewModel.emailToMyself(context) }
+            onSaveToGallery = {
+                showShareExportSheet = false
+                viewModel.savePagesToGallery(context)
+            },
+            onEmailToMyself = {
+                showShareExportSheet = false
+                viewModel.emailToMyself(context)
+            }
         )
     }
 
@@ -435,13 +661,15 @@ fun DocumentDetailScreen(
         DocumentMoreDialog(
             onDismiss = { showMoreDialog = false },
             onBatchEditClick = {
-                Toast.makeText(context, "Batch edit active.", Toast.LENGTH_SHORT).show()
+                showMoreDialog = false
+                viewModel.setSelectMode(true)
             },
             onSetTagClick = {
                 Toast.makeText(context, "Tag management.", Toast.LENGTH_SHORT).show()
             },
             onPdfPasswordClick = {
-                showPdfDialog = true
+                showMoreDialog = false
+                onNavigateToEditPdf(docId, 0)
             },
             onMoveToFolderClick = {
                 showMoveFolderDialog = true
