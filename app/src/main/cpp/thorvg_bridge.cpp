@@ -33,7 +33,7 @@ Java_org_openscanner_cv_ThorvgEngine_nativeInit(JNIEnv* /* env */, jclass /* cla
 JNIEXPORT jboolean JNICALL
 Java_org_openscanner_cv_ThorvgEngine_nativeRenderStroke(
     JNIEnv* env,
-    jclass /* clazz */,
+    jclass clazz,
     jobject bitmap,
     jfloatArray points,
     jfloat strokeWidth,
@@ -41,6 +41,24 @@ Java_org_openscanner_cv_ThorvgEngine_nativeRenderStroke(
     jint g,
     jint b,
     jint a
+) {
+    return Java_org_openscanner_cv_ThorvgEngine_nativeRenderSmoothVectorStroke(
+        env, clazz, bitmap, points, strokeWidth, r, g, b, a, JNI_TRUE
+    );
+}
+
+JNIEXPORT jboolean JNICALL
+Java_org_openscanner_cv_ThorvgEngine_nativeRenderSmoothVectorStroke(
+    JNIEnv* env,
+    jclass /* clazz */,
+    jobject bitmap,
+    jfloatArray points,
+    jfloat strokeWidth,
+    jint r,
+    jint g,
+    jint b,
+    jint a,
+    jboolean isCubicSmoothed
 ) {
     if (!bitmap || !points) return JNI_FALSE;
     ensureInitialized();
@@ -78,9 +96,41 @@ Java_org_openscanner_cv_ThorvgEngine_nativeRenderStroke(
     shape->strokeJoin(tvg::StrokeJoin::Round);
     shape->strokeFill(static_cast<uint8_t>(r), static_cast<uint8_t>(g), static_cast<uint8_t>(b), static_cast<uint8_t>(a));
 
+    int numPoints = ptCount / 2;
     shape->moveTo(pts[0], pts[1]);
-    for (int i = 2; i < ptCount; i += 2) {
-        shape->lineTo(pts[i], pts[i + 1]);
+
+    if (isCubicSmoothed && numPoints >= 3) {
+        // Continuous tangent Bézier spline fitting for smooth freehand drawing & signatures
+        float currX = pts[0];
+        float currY = pts[1];
+
+        for (int i = 1; i < numPoints - 1; ++i) {
+            float ctrlX = pts[i * 2];
+            float ctrlY = pts[i * 2 + 1];
+            float nextX = pts[(i + 1) * 2];
+            float nextY = pts[(i + 1) * 2 + 1];
+
+            // Midpoint between current control point and next point
+            float midX = (ctrlX + nextX) * 0.5f;
+            float midY = (ctrlY + nextY) * 0.5f;
+
+            // Convert quadratic curve (curr -> ctrl -> mid) to exact cubic Bezier
+            float c1x = currX + (2.0f / 3.0f) * (ctrlX - currX);
+            float c1y = currY + (2.0f / 3.0f) * (ctrlY - currY);
+            float c2x = midX + (2.0f / 3.0f) * (ctrlX - midX);
+            float c2y = midY + (2.0f / 3.0f) * (ctrlY - midY);
+
+            shape->cubicTo(c1x, c1y, c2x, c2y, midX, midY);
+            currX = midX;
+            currY = midY;
+        }
+
+        // Final segment to last point
+        shape->lineTo(pts[ptCount - 2], pts[ptCount - 1]);
+    } else {
+        for (int i = 2; i < ptCount; i += 2) {
+            shape->lineTo(pts[i], pts[i + 1]);
+        }
     }
 
     canvas->add(shape);
@@ -95,7 +145,7 @@ Java_org_openscanner_cv_ThorvgEngine_nativeRenderStroke(
 JNIEXPORT jboolean JNICALL
 Java_org_openscanner_cv_ThorvgEngine_nativeRenderShape(
     JNIEnv* env,
-    jclass /* clazz */,
+    jclass clazz,
     jobject bitmap,
     jint shapeType,
     jfloat x1,
@@ -108,6 +158,47 @@ Java_org_openscanner_cv_ThorvgEngine_nativeRenderShape(
     jint b,
     jint a,
     jboolean isFilled
+) {
+    jint fillType = isFilled ? 1 : 0;
+    return Java_org_openscanner_cv_ThorvgEngine_nativeRenderStyledShape(
+        env, clazz, bitmap, shapeType,
+        x1, y1, x2, y2,
+        strokeWidth,
+        r, g, b, a,
+        fillType,
+        r, g, b, a,
+        r, g, b, a,
+        0, // Solid border
+        4.0f // default corner radius
+    );
+}
+
+JNIEXPORT jboolean JNICALL
+Java_org_openscanner_cv_ThorvgEngine_nativeRenderStyledShape(
+    JNIEnv* env,
+    jclass /* clazz */,
+    jobject bitmap,
+    jint shapeType,
+    jfloat x1,
+    jfloat y1,
+    jfloat x2,
+    jfloat y2,
+    jfloat strokeWidth,
+    jint strokeR,
+    jint strokeG,
+    jint strokeB,
+    jint strokeA,
+    jint fillType,
+    jint fillR1,
+    jint fillG1,
+    jint fillB1,
+    jint fillA1,
+    jint fillR2,
+    jint fillG2,
+    jint fillB2,
+    jint fillA2,
+    jint dashStyle,
+    jfloat cornerRadius
 ) {
     if (!bitmap) return JNI_FALSE;
     ensureInitialized();
@@ -131,29 +222,64 @@ Java_org_openscanner_cv_ThorvgEngine_nativeRenderShape(
     canvas->target(static_cast<uint32_t*>(pixels), info.stride / 4, info.width, info.height, tvg::ColorSpace::ABGR8888);
 
     auto shape = tvg::Shape::gen();
-    shape->strokeWidth(strokeWidth);
-    shape->strokeCap(tvg::StrokeCap::Round);
-    shape->strokeJoin(tvg::StrokeJoin::Round);
 
-    uint8_t ur = static_cast<uint8_t>(r);
-    uint8_t ug = static_cast<uint8_t>(g);
-    uint8_t ub = static_cast<uint8_t>(b);
-    uint8_t ua = static_cast<uint8_t>(a);
+    // 1. Border stroke configuration
+    if (strokeWidth > 0.0f && strokeA > 0) {
+        shape->strokeWidth(strokeWidth);
+        shape->strokeCap(tvg::StrokeCap::Round);
+        shape->strokeJoin(tvg::StrokeJoin::Round);
+        shape->strokeFill(static_cast<uint8_t>(strokeR), static_cast<uint8_t>(strokeG), static_cast<uint8_t>(strokeB), static_cast<uint8_t>(strokeA));
 
-    if (isFilled) {
-        shape->fill(ur, ug, ub, ua);
+        if (dashStyle == 1) { // Dashed
+            float dashes[] = { strokeWidth * 2.8f, strokeWidth * 1.8f };
+            shape->strokeDash(dashes, 2);
+        } else if (dashStyle == 2) { // Dotted
+            float dots[] = { 1.5f, strokeWidth * 1.6f };
+            shape->strokeDash(dots, 2);
+        } else {
+            shape->strokeDash(nullptr, 0);
+        }
     } else {
-        shape->strokeFill(ur, ug, ub, ua);
+        shape->strokeWidth(0.0f);
     }
 
+    // 2. Custom Styling: Solid, Linear Gradient, or Radial Gradient Fill
+    if (fillType == 1) { // Solid Fill
+        shape->fill(static_cast<uint8_t>(fillR1), static_cast<uint8_t>(fillG1), static_cast<uint8_t>(fillB1), static_cast<uint8_t>(fillA1));
+    } else if (fillType == 2) { // Linear Gradient Fill
+        tvg::Fill::ColorStop stops[2] = {
+            { 0.0f, static_cast<uint8_t>(fillR1), static_cast<uint8_t>(fillG1), static_cast<uint8_t>(fillB1), static_cast<uint8_t>(fillA1) },
+            { 1.0f, static_cast<uint8_t>(fillR2), static_cast<uint8_t>(fillG2), static_cast<uint8_t>(fillB2), static_cast<uint8_t>(fillA2) }
+        };
+        auto linGrad = tvg::LinearGradient::gen();
+        linGrad->linear(x1, y1, x2, y2);
+        linGrad->colorStops(stops, 2);
+        shape->fill(linGrad);
+    } else if (fillType == 3) { // Radial Gradient Fill
+        float cx = (x1 + x2) * 0.5f;
+        float cy = (y1 + y2) * 0.5f;
+        float r = std::max(std::abs(x2 - x1), std::abs(y2 - y1)) * 0.5f;
+        tvg::Fill::ColorStop stops[2] = {
+            { 0.0f, static_cast<uint8_t>(fillR1), static_cast<uint8_t>(fillG1), static_cast<uint8_t>(fillB1), static_cast<uint8_t>(fillA1) },
+            { 1.0f, static_cast<uint8_t>(fillR2), static_cast<uint8_t>(fillG2), static_cast<uint8_t>(fillB2), static_cast<uint8_t>(fillA2) }
+        };
+        auto radGrad = tvg::RadialGradient::gen();
+        radGrad->radial(cx, cy, r, cx, cy, 0.0f);
+        radGrad->colorStops(stops, 2);
+        shape->fill(radGrad);
+    }
+
+    // 3. Shape Geometry Overlay
     switch (shapeType) {
         case 0: // RECTANGLE OUTLINE
-        case 1: { // FILLED BOX (Redaction Box)
+        case 1: // FILLED / REDACTION BOX
+        case 5: { // HIGHLIGHTER BOX
             float left = std::min(x1, x2);
             float top = std::min(y1, y2);
             float w = std::abs(x2 - x1);
             float h = std::abs(y2 - y1);
-            shape->appendRect(left, top, w, h, 4.0f, 4.0f);
+            float cr = std::max(0.0f, cornerRadius);
+            shape->appendRect(left, top, w, h, cr, cr);
             break;
         }
         case 2: { // CIRCLE / ELLIPSE

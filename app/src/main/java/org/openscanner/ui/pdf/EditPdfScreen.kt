@@ -13,6 +13,7 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -27,12 +28,16 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -73,6 +78,7 @@ enum class PdfTool {
     PAN_ZOOM,
     PENCIL,
     HIGHLIGHTER,
+    SIGNATURE,
     SHAPE,
     SMUDGE_BLUR,
     TEXT,
@@ -82,6 +88,7 @@ enum class PdfTool {
 enum class AnnotationShapeType(val label: String) {
     RECTANGLE("Box"),
     FILLED_RECT("Redaction"),
+    HIGHLIGHTER_BOX("Highlight Box"),
     CIRCLE("Circle"),
     ARROW("Arrow"),
     LINE("Line")
@@ -92,17 +99,25 @@ sealed class PageAnnotation {
         val points: List<Offset>,
         val color: Color,
         val strokeWidth: Float,
+        val opacity: Float = 1.0f,
         val isHighlighter: Boolean = false,
-        val isSmudge: Boolean = false
+        val isSmudge: Boolean = false,
+        val isSignature: Boolean = false
     ) : PageAnnotation()
 
     data class Shape(
         val shapeType: AnnotationShapeType,
         val start: Offset,
         val end: Offset,
-        val color: Color,
+        val borderColor: Color,
         val strokeWidth: Float,
-        val isFilled: Boolean = false
+        val borderOpacity: Float = 1.0f,
+        val fillType: ThorvgEngine.FillType = ThorvgEngine.FillType.NONE,
+        val fillColor1: Color = borderColor,
+        val fillColor2: Color = borderColor,
+        val fillOpacity: Float = 1.0f,
+        val dashStyle: ThorvgEngine.DashStyle = ThorvgEngine.DashStyle.SOLID,
+        val cornerRadius: Float = 6.0f
     ) : PageAnnotation()
 
     data class Text(
@@ -139,6 +154,11 @@ fun EditPdfScreen(
     var selectedShapeType by remember { mutableStateOf(AnnotationShapeType.RECTANGLE) }
     var selectedColor by remember { mutableStateOf(Color(0xFFFFEB3B)) } // Fluorescent highlighter yellow
     var strokeWidth by remember { mutableFloatStateOf(8f) }
+    var selectedFillType by remember { mutableStateOf(ThorvgEngine.FillType.NONE) }
+    var selectedDashStyle by remember { mutableStateOf(ThorvgEngine.DashStyle.SOLID) }
+    var annotationOpacity by remember { mutableFloatStateOf(1.0f) }
+    var gradientEndColor by remember { mutableStateOf(Color(0xFFFF9800)) }
+    var showSignatureDialog by remember { mutableStateOf(false) }
 
     // Annotations map: pageId -> List<PageAnnotation>
     var pageAnnotations by remember { mutableStateOf(mapOf<Long, List<PageAnnotation>>()) }
@@ -273,36 +293,45 @@ fun EditPdfScreen(
                                     flatPoints[i * 2 + 1] = item.points[i].y * sy
                                 }
                                 val strokeColor = if (item.isHighlighter) {
-                                    item.color.copy(alpha = 0.45f)
+                                    item.color.copy(alpha = 0.45f * item.opacity)
                                 } else {
                                     item.color
                                 }
-                                ThorvgEngine.renderStroke(
+                                ThorvgEngine.renderSmoothVectorStroke(
                                     bitmap = mutableBmp,
                                     points = flatPoints,
                                     strokeWidth = scaledWidth,
-                                    color = strokeColor
+                                    color = strokeColor,
+                                    opacity = item.opacity,
+                                    isCubicSmoothed = true
                                 )
                             }
                         }
                         is PageAnnotation.Shape -> {
-                            val shapeType = when (item.shapeType) {
+                            val thShapeType = when (item.shapeType) {
                                 AnnotationShapeType.RECTANGLE -> ThorvgEngine.ShapeType.RECTANGLE
                                 AnnotationShapeType.FILLED_RECT -> ThorvgEngine.ShapeType.FILLED_BOX
+                                AnnotationShapeType.HIGHLIGHTER_BOX -> ThorvgEngine.ShapeType.HIGHLIGHTER_BOX
                                 AnnotationShapeType.CIRCLE -> ThorvgEngine.ShapeType.CIRCLE
                                 AnnotationShapeType.LINE -> ThorvgEngine.ShapeType.LINE
                                 AnnotationShapeType.ARROW -> ThorvgEngine.ShapeType.ARROW
                             }
-                            ThorvgEngine.renderShape(
+                            ThorvgEngine.renderStyledShape(
                                 bitmap = mutableBmp,
-                                shapeType = shapeType,
+                                shapeType = thShapeType,
                                 x1 = item.start.x * sx,
                                 y1 = item.start.y * sy,
                                 x2 = item.end.x * sx,
                                 y2 = item.end.y * sy,
                                 strokeWidth = item.strokeWidth * sx,
-                                color = item.color,
-                                isFilled = item.isFilled
+                                borderColor = item.borderColor,
+                                borderOpacity = item.borderOpacity,
+                                fillType = item.fillType,
+                                fillColor1 = item.fillColor1,
+                                fillColor2 = item.fillColor2,
+                                fillOpacity = item.fillOpacity,
+                                dashStyle = item.dashStyle,
+                                cornerRadius = item.cornerRadius * sx
                             )
                         }
                         is PageAnnotation.Text -> {
@@ -481,77 +510,161 @@ fun EditPdfScreen(
                     .background(Color(0xFF141414))
                     .navigationBarsPadding()
             ) {
-                // Secondary Controls: Color Palette & Stroke Size (When a drawing/shape tool is active)
+                // Secondary Controls: Color Palette, Stroke Size, Shapes, Styling, Opacity
                 if (activeTool != PdfTool.PAN_ZOOM && activeTool != PdfTool.ERASER) {
-                    Row(
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 14.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
+                            .padding(horizontal = 12.dp, vertical = 6.dp)
                     ) {
                         // Color Palette
                         val colorsPalette = listOf(
-                            Color(0xFFFFEB3B), // Yellow
-                            Color(0xFF00E676), // Green
-                            Color(0xFF29B6F6), // Blue
-                            Color(0xFFFF5252), // Red
-                            Color(0xFF212121), // Black
-                            Color(0xFFFFFFFF)  // White
+                            Color(0xFFFFEB3B), // Fluorescent Yellow
+                            Color(0xFF00E676), // Neon Green
+                            Color(0xFF29B6F6), // Sky Blue
+                            Color(0xFFFF5252), // Coral Red
+                            Color(0xFFAB47BC), // Purple
+                            Color(0xFF212121), // Charcoal Black
+                            Color(0xFFFFFFFF)  // Pure White
                         )
 
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            colorsPalette.forEach { c ->
-                                val isSelected = selectedColor == c
-                                Box(
-                                    modifier = Modifier
-                                        .size(24.dp)
-                                        .clip(CircleShape)
-                                        .background(c)
-                                        .border(
-                                            width = if (isSelected) 2.5.dp else 1.dp,
-                                            color = if (isSelected) Color.White else Color.DarkGray,
-                                            shape = CircleShape
-                                        )
-                                        .clickable { selectedColor = c }
-                                )
-                            }
-                        }
-
-                        // Shapes Selector (If Shape Tool Active)
+                        // 1. Shapes Selector & Custom Styling (If Shape Tool Active)
                         if (activeTool == PdfTool.SHAPE) {
-                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                AnnotationShapeType.entries.forEach { st ->
+                            LazyRow(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 6.dp)
+                            ) {
+                                items(AnnotationShapeType.entries) { st ->
                                     val isSelected = selectedShapeType == st
                                     Surface(
-                                        shape = RoundedCornerShape(6.dp),
-                                        color = if (isSelected) ScannerGreen.copy(alpha = 0.25f) else Color(0xFF222222),
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = if (isSelected) ScannerGreen.copy(alpha = 0.22f) else Color(0xFF222222),
                                         border = BorderStroke(1.dp, if (isSelected) ScannerGreen else Color.DarkGray),
                                         modifier = Modifier.clickable { selectedShapeType = st }
                                     ) {
                                         Text(
                                             text = st.label,
                                             color = if (isSelected) ScannerGreen else Color.LightGray,
-                                            fontSize = 10.sp,
+                                            fontSize = 11.sp,
                                             fontWeight = FontWeight.Bold,
-                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp)
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
                                         )
                                     }
                                 }
                             }
-                        } else {
-                            // Stroke Width Quick Stepper
+
+                            // Custom Styling: Gradient Fill & Border Dash
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 6.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                // Fill Type: None, Solid, Linear Grad, Radial Grad
+                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    listOf(
+                                        ThorvgEngine.FillType.NONE to "Outline",
+                                        ThorvgEngine.FillType.SOLID to "Solid",
+                                        ThorvgEngine.FillType.LINEAR_GRADIENT to "Linear",
+                                        ThorvgEngine.FillType.RADIAL_GRADIENT to "Radial"
+                                    ).forEach { (ft, label) ->
+                                        val isSel = selectedFillType == ft
+                                        Surface(
+                                            shape = RoundedCornerShape(6.dp),
+                                            color = if (isSel) ScannerGreen.copy(alpha = 0.25f) else Color(0xFF1E1E1E),
+                                            border = BorderStroke(1.dp, if (isSel) ScannerGreen else Color(0xFF333333)),
+                                            modifier = Modifier.clickable { selectedFillType = ft }
+                                        ) {
+                                            Text(
+                                                text = label,
+                                                color = if (isSel) ScannerGreen else Color.Gray,
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Medium,
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                                            )
+                                        }
+                                    }
+                                }
+
+                                // Border Dash: Solid, Dashed, Dotted
+                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    listOf(
+                                        ThorvgEngine.DashStyle.SOLID to "Solid",
+                                        ThorvgEngine.DashStyle.DASHED to "Dash",
+                                        ThorvgEngine.DashStyle.DOTTED to "Dot"
+                                    ).forEach { (ds, label) ->
+                                        val isSel = selectedDashStyle == ds
+                                        Surface(
+                                            shape = RoundedCornerShape(6.dp),
+                                            color = if (isSel) ScannerGreen.copy(alpha = 0.25f) else Color(0xFF1E1E1E),
+                                            border = BorderStroke(1.dp, if (isSel) ScannerGreen else Color(0xFF333333)),
+                                            modifier = Modifier.clickable { selectedDashStyle = ds }
+                                        ) {
+                                            Text(
+                                                text = label,
+                                                color = if (isSel) ScannerGreen else Color.Gray,
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Medium,
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // 2. Palette, Stroke Size, and Opacity Controls
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            // Color Palette
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(7.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                colorsPalette.forEach { c ->
+                                    val isSelected = selectedColor == c
+                                    Box(
+                                        modifier = Modifier
+                                            .size(24.dp)
+                                            .clip(CircleShape)
+                                            .background(c)
+                                            .border(
+                                                width = if (isSelected) 2.5.dp else 1.dp,
+                                                color = if (isSelected) Color.White else Color.DarkGray,
+                                                shape = CircleShape
+                                            )
+                                            .clickable { selectedColor = c }
+                                    )
+                                }
+                            }
+
+                            // Opacity & Size Controls
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text("Size", color = Color.Gray, fontSize = 11.sp)
-                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Alpha", color = Color.Gray, fontSize = 10.sp)
+                                Slider(
+                                    value = annotationOpacity,
+                                    onValueChange = { annotationOpacity = it },
+                                    valueRange = 0.1f..1.0f,
+                                    modifier = Modifier.width(66.dp),
+                                    colors = SliderDefaults.colors(
+                                        thumbColor = ScannerGreen,
+                                        activeTrackColor = ScannerGreen,
+                                        inactiveTrackColor = Color.DarkGray
+                                    )
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Size", color = Color.Gray, fontSize = 10.sp)
                                 Slider(
                                     value = strokeWidth,
                                     onValueChange = { strokeWidth = it },
                                     valueRange = 2f..36f,
-                                    modifier = Modifier.width(110.dp),
+                                    modifier = Modifier.width(72.dp),
                                     colors = SliderDefaults.colors(
                                         thumbColor = ScannerGreen,
                                         activeTrackColor = ScannerGreen,
@@ -565,11 +678,11 @@ fun EditPdfScreen(
                     HorizontalDivider(color = Color(0xFF222222), thickness = 0.5.dp)
                 }
 
-                // Main Tool Strip (Pan/Zoom, Pencil, Highlighter, Shapes, Smudge, Text, Eraser)
+                // Main Tool Strip (Pan/Zoom, Pencil, Marker, Signature, Shapes, Smudge, Text, Eraser)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(vertical = 8.dp, horizontal = 4.dp),
+                        .padding(vertical = 8.dp, horizontal = 2.dp),
                     horizontalArrangement = Arrangement.SpaceEvenly,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -595,6 +708,15 @@ fun EditPdfScreen(
                         onClick = {
                             activeTool = PdfTool.HIGHLIGHTER
                             if (strokeWidth < 14f) strokeWidth = 22f
+                        }
+                    )
+                    PdfToolButton(
+                        icon = Icons.Outlined.Gesture,
+                        label = "Sign",
+                        isActive = activeTool == PdfTool.SIGNATURE,
+                        onClick = {
+                            activeTool = PdfTool.SIGNATURE
+                            showSignatureDialog = true
                         }
                     )
                     PdfToolButton(
@@ -747,14 +869,27 @@ fun EditPdfScreen(
                                             val s = shapeStartPoint
                                             val e = shapeEndPoint
                                             if (s != null && e != null) {
-                                                val isFilled = selectedShapeType == AnnotationShapeType.FILLED_RECT
                                                 val newShape = PageAnnotation.Shape(
                                                     shapeType = selectedShapeType,
                                                     start = s,
                                                     end = e,
-                                                    color = if (isFilled) Color.Black else selectedColor,
+                                                    borderColor = if (selectedShapeType == AnnotationShapeType.FILLED_RECT) Color.Black else selectedColor,
                                                     strokeWidth = strokeWidth,
-                                                    isFilled = isFilled
+                                                    borderOpacity = annotationOpacity,
+                                                    fillType = when (selectedShapeType) {
+                                                        AnnotationShapeType.FILLED_RECT -> ThorvgEngine.FillType.SOLID
+                                                        AnnotationShapeType.HIGHLIGHTER_BOX -> ThorvgEngine.FillType.SOLID
+                                                        else -> selectedFillType
+                                                    },
+                                                    fillColor1 = when (selectedShapeType) {
+                                                        AnnotationShapeType.FILLED_RECT -> Color.Black
+                                                        AnnotationShapeType.HIGHLIGHTER_BOX -> selectedColor.copy(alpha = 0.35f)
+                                                        else -> selectedColor
+                                                    },
+                                                    fillColor2 = gradientEndColor,
+                                                    fillOpacity = if (selectedShapeType == AnnotationShapeType.HIGHLIGHTER_BOX) 0.35f * annotationOpacity else annotationOpacity,
+                                                    dashStyle = selectedDashStyle,
+                                                    cornerRadius = 8f
                                                 )
                                                 pushUndo(currentPage.id, currentAnnotations + newShape)
                                             }
@@ -763,12 +898,15 @@ fun EditPdfScreen(
                                         } else if (currentDrawingPoints.isNotEmpty()) {
                                             val isHighlighter = activeTool == PdfTool.HIGHLIGHTER
                                             val isSmudge = activeTool == PdfTool.SMUDGE_BLUR
+                                            val isSign = activeTool == PdfTool.SIGNATURE
                                             val stroke = PageAnnotation.Stroke(
                                                 points = currentDrawingPoints,
                                                 color = if (isSmudge) Color.DarkGray else selectedColor,
                                                 strokeWidth = strokeWidth,
+                                                opacity = annotationOpacity,
                                                 isHighlighter = isHighlighter,
-                                                isSmudge = isSmudge
+                                                isSmudge = isSmudge,
+                                                isSignature = isSign
                                             )
                                             pushUndo(currentPage.id, currentAnnotations + stroke)
                                             currentDrawingPoints = emptyList()
@@ -806,13 +944,18 @@ fun EditPdfScreen(
                         currentAnnotations.forEach { item ->
                             when (item) {
                                 is PageAnnotation.Stroke -> {
-                                    val strokeAlpha = if (item.isHighlighter) 0.40f else if (item.isSmudge) 0.90f else 1f
+                                    val strokeAlpha = if (item.isHighlighter) 0.40f * item.opacity else if (item.isSmudge) 0.90f else item.opacity
                                     if (item.points.size > 1) {
                                         val p = androidx.compose.ui.graphics.Path()
                                         p.moveTo(item.points[0].x, item.points[0].y)
                                         for (i in 1 until item.points.size) {
-                                            p.lineTo(item.points[i].x, item.points[i].y)
+                                            val prev = item.points[i - 1]
+                                            val curr = item.points[i]
+                                            val midX = (prev.x + curr.x) / 2f
+                                            val midY = (prev.y + curr.y) / 2f
+                                            p.quadraticBezierTo(prev.x, prev.y, midX, midY)
                                         }
+                                        p.lineTo(item.points.last().x, item.points.last().y)
                                         drawPath(
                                             path = p,
                                             color = item.color.copy(alpha = strokeAlpha),
@@ -830,55 +973,105 @@ fun EditPdfScreen(
                                     val width = (maxOf(item.start.x, item.end.x) - left).coerceAtLeast(1f)
                                     val height = (maxOf(item.start.y, item.end.y) - top).coerceAtLeast(1f)
 
+                                    val pathEffect = when (item.dashStyle) {
+                                        ThorvgEngine.DashStyle.SOLID -> null
+                                        ThorvgEngine.DashStyle.DASHED -> PathEffect.dashPathEffect(floatArrayOf(16f, 10f), 0f)
+                                        ThorvgEngine.DashStyle.DOTTED -> PathEffect.dashPathEffect(floatArrayOf(5f, 6f), 0f)
+                                    }
+
+                                    val fillBrush = when (item.fillType) {
+                                        ThorvgEngine.FillType.NONE -> null
+                                        ThorvgEngine.FillType.SOLID -> Brush.linearGradient(
+                                            colors = listOf(item.fillColor1.copy(alpha = item.fillOpacity), item.fillColor1.copy(alpha = item.fillOpacity))
+                                        )
+                                        ThorvgEngine.FillType.LINEAR_GRADIENT -> Brush.linearGradient(
+                                            colors = listOf(item.fillColor1.copy(alpha = item.fillOpacity), item.fillColor2.copy(alpha = item.fillOpacity)),
+                                            start = Offset(left, top),
+                                            end = Offset(left + width, top + height)
+                                        )
+                                        ThorvgEngine.FillType.RADIAL_GRADIENT -> Brush.radialGradient(
+                                            colors = listOf(item.fillColor1.copy(alpha = item.fillOpacity), item.fillColor2.copy(alpha = item.fillOpacity)),
+                                            center = Offset(left + width / 2f, top + height / 2f),
+                                            radius = maxOf(width, height) / 2f
+                                        )
+                                    }
+
                                     when (item.shapeType) {
                                         AnnotationShapeType.RECTANGLE -> {
-                                            drawRect(
-                                                color = item.color,
+                                            if (fillBrush != null) {
+                                                drawRoundRect(
+                                                    brush = fillBrush,
+                                                    topLeft = Offset(left, top),
+                                                    size = Size(width, height),
+                                                    cornerRadius = CornerRadius(item.cornerRadius)
+                                                )
+                                            }
+                                            drawRoundRect(
+                                                color = item.borderColor.copy(alpha = item.borderOpacity),
                                                 topLeft = Offset(left, top),
                                                 size = Size(width, height),
-                                                style = Stroke(width = item.strokeWidth)
+                                                cornerRadius = CornerRadius(item.cornerRadius),
+                                                style = Stroke(width = item.strokeWidth, pathEffect = pathEffect)
                                             )
                                         }
                                         AnnotationShapeType.FILLED_RECT -> {
-                                            drawRect(
-                                                color = item.color,
+                                            drawRoundRect(
+                                                color = Color.Black.copy(alpha = 0.95f),
                                                 topLeft = Offset(left, top),
-                                                size = Size(width, height)
+                                                size = Size(width, height),
+                                                cornerRadius = CornerRadius(item.cornerRadius)
+                                            )
+                                        }
+                                        AnnotationShapeType.HIGHLIGHTER_BOX -> {
+                                            drawRoundRect(
+                                                color = item.borderColor.copy(alpha = 0.35f * item.borderOpacity),
+                                                topLeft = Offset(left, top),
+                                                size = Size(width, height),
+                                                cornerRadius = CornerRadius(item.cornerRadius)
                                             )
                                         }
                                         AnnotationShapeType.CIRCLE -> {
+                                            if (fillBrush != null) {
+                                                drawOval(
+                                                    brush = fillBrush,
+                                                    topLeft = Offset(left, top),
+                                                    size = Size(width, height)
+                                                )
+                                            }
                                             drawOval(
-                                                color = item.color,
+                                                color = item.borderColor.copy(alpha = item.borderOpacity),
                                                 topLeft = Offset(left, top),
                                                 size = Size(width, height),
-                                                style = Stroke(width = item.strokeWidth)
+                                                style = Stroke(width = item.strokeWidth, pathEffect = pathEffect)
                                             )
                                         }
                                         AnnotationShapeType.LINE -> {
                                             drawLine(
-                                                color = item.color,
+                                                color = item.borderColor.copy(alpha = item.borderOpacity),
                                                 start = item.start,
                                                 end = item.end,
                                                 strokeWidth = item.strokeWidth,
-                                                cap = StrokeCap.Round
+                                                cap = StrokeCap.Round,
+                                                pathEffect = pathEffect
                                             )
                                         }
                                         AnnotationShapeType.ARROW -> {
                                             drawLine(
-                                                color = item.color,
+                                                color = item.borderColor.copy(alpha = item.borderOpacity),
                                                 start = item.start,
                                                 end = item.end,
                                                 strokeWidth = item.strokeWidth,
-                                                cap = StrokeCap.Round
+                                                cap = StrokeCap.Round,
+                                                pathEffect = pathEffect
                                             )
                                             val angle = atan2((item.end.y - item.start.y).toDouble(), (item.end.x - item.start.x).toDouble())
-                                            val arrowSize = 28f
+                                            val arrowSize = (item.strokeWidth * 3.5f).coerceIn(20f, 45f)
                                             val x1 = item.end.x - arrowSize * cos(angle - PI / 6).toFloat()
                                             val y1 = item.end.y - arrowSize * sin(angle - PI / 6).toFloat()
                                             val x2 = item.end.x - arrowSize * cos(angle + PI / 6).toFloat()
                                             val y2 = item.end.y - arrowSize * sin(angle + PI / 6).toFloat()
-                                            drawLine(color = item.color, start = item.end, end = Offset(x1, y1), strokeWidth = item.strokeWidth, cap = StrokeCap.Round)
-                                            drawLine(color = item.color, start = item.end, end = Offset(x2, y2), strokeWidth = item.strokeWidth, cap = StrokeCap.Round)
+                                            drawLine(color = item.borderColor.copy(alpha = item.borderOpacity), start = item.end, end = Offset(x1, y1), strokeWidth = item.strokeWidth, cap = StrokeCap.Round)
+                                            drawLine(color = item.borderColor.copy(alpha = item.borderOpacity), start = item.end, end = Offset(x2, y2), strokeWidth = item.strokeWidth, cap = StrokeCap.Round)
                                         }
                                     }
                                 }
@@ -894,13 +1087,18 @@ fun EditPdfScreen(
                             val p = androidx.compose.ui.graphics.Path()
                             p.moveTo(currentDrawingPoints[0].x, currentDrawingPoints[0].y)
                             for (i in 1 until currentDrawingPoints.size) {
-                                p.lineTo(currentDrawingPoints[i].x, currentDrawingPoints[i].y)
+                                val prev = currentDrawingPoints[i - 1]
+                                val curr = currentDrawingPoints[i]
+                                val midX = (prev.x + curr.x) / 2f
+                                val midY = (prev.y + curr.y) / 2f
+                                p.quadraticBezierTo(prev.x, prev.y, midX, midY)
                             }
+                            p.lineTo(currentDrawingPoints.last().x, currentDrawingPoints.last().y)
                             val isHighlighter = activeTool == PdfTool.HIGHLIGHTER
                             val isSmudge = activeTool == PdfTool.SMUDGE_BLUR
                             drawPath(
                                 path = p,
-                                color = if (isSmudge) Color.DarkGray else selectedColor.copy(alpha = if (isHighlighter) 0.45f else 1f),
+                                color = if (isSmudge) Color.DarkGray else selectedColor.copy(alpha = if (isHighlighter) 0.45f * annotationOpacity else annotationOpacity),
                                 style = Stroke(
                                     width = strokeWidth,
                                     cap = StrokeCap.Round,
@@ -918,18 +1116,105 @@ fun EditPdfScreen(
                             val width = (maxOf(s.x, e.x) - left).coerceAtLeast(1f)
                             val height = (maxOf(s.y, e.y) - top).coerceAtLeast(1f)
 
+                            val pathEffect = when (selectedDashStyle) {
+                                ThorvgEngine.DashStyle.SOLID -> null
+                                ThorvgEngine.DashStyle.DASHED -> PathEffect.dashPathEffect(floatArrayOf(16f, 10f), 0f)
+                                ThorvgEngine.DashStyle.DOTTED -> PathEffect.dashPathEffect(floatArrayOf(5f, 6f), 0f)
+                            }
+
+                            val liveFillBrush = when (selectedFillType) {
+                                ThorvgEngine.FillType.NONE -> null
+                                ThorvgEngine.FillType.SOLID -> Brush.linearGradient(
+                                    colors = listOf(selectedColor.copy(alpha = annotationOpacity), selectedColor.copy(alpha = annotationOpacity))
+                                )
+                                ThorvgEngine.FillType.LINEAR_GRADIENT -> Brush.linearGradient(
+                                    colors = listOf(selectedColor.copy(alpha = annotationOpacity), gradientEndColor.copy(alpha = annotationOpacity)),
+                                    start = Offset(left, top),
+                                    end = Offset(left + width, top + height)
+                                )
+                                ThorvgEngine.FillType.RADIAL_GRADIENT -> Brush.radialGradient(
+                                    colors = listOf(selectedColor.copy(alpha = annotationOpacity), gradientEndColor.copy(alpha = annotationOpacity)),
+                                    center = Offset(left + width / 2f, top + height / 2f),
+                                    radius = maxOf(width, height) / 2f
+                                )
+                            }
+
                             when (selectedShapeType) {
                                 AnnotationShapeType.RECTANGLE -> {
-                                    drawRect(color = selectedColor, topLeft = Offset(left, top), size = Size(width, height), style = Stroke(width = strokeWidth))
+                                    if (liveFillBrush != null) {
+                                        drawRoundRect(
+                                            brush = liveFillBrush,
+                                            topLeft = Offset(left, top),
+                                            size = Size(width, height),
+                                            cornerRadius = CornerRadius(8f)
+                                        )
+                                    }
+                                    drawRoundRect(
+                                        color = selectedColor.copy(alpha = annotationOpacity),
+                                        topLeft = Offset(left, top),
+                                        size = Size(width, height),
+                                        cornerRadius = CornerRadius(8f),
+                                        style = Stroke(width = strokeWidth, pathEffect = pathEffect)
+                                    )
                                 }
                                 AnnotationShapeType.FILLED_RECT -> {
-                                    drawRect(color = Color.Black.copy(alpha = 0.85f), topLeft = Offset(left, top), size = Size(width, height))
+                                    drawRoundRect(
+                                        color = Color.Black.copy(alpha = 0.95f),
+                                        topLeft = Offset(left, top),
+                                        size = Size(width, height),
+                                        cornerRadius = CornerRadius(8f)
+                                    )
+                                }
+                                AnnotationShapeType.HIGHLIGHTER_BOX -> {
+                                    drawRoundRect(
+                                        color = selectedColor.copy(alpha = 0.35f * annotationOpacity),
+                                        topLeft = Offset(left, top),
+                                        size = Size(width, height),
+                                        cornerRadius = CornerRadius(8f)
+                                    )
                                 }
                                 AnnotationShapeType.CIRCLE -> {
-                                    drawOval(color = selectedColor, topLeft = Offset(left, top), size = Size(width, height), style = Stroke(width = strokeWidth))
+                                    if (liveFillBrush != null) {
+                                        drawOval(
+                                            brush = liveFillBrush,
+                                            topLeft = Offset(left, top),
+                                            size = Size(width, height)
+                                        )
+                                    }
+                                    drawOval(
+                                        color = selectedColor.copy(alpha = annotationOpacity),
+                                        topLeft = Offset(left, top),
+                                        size = Size(width, height),
+                                        style = Stroke(width = strokeWidth, pathEffect = pathEffect)
+                                    )
                                 }
-                                AnnotationShapeType.LINE, AnnotationShapeType.ARROW -> {
-                                    drawLine(color = selectedColor, start = s, end = e, strokeWidth = strokeWidth, cap = StrokeCap.Round)
+                                AnnotationShapeType.LINE -> {
+                                    drawLine(
+                                        color = selectedColor.copy(alpha = annotationOpacity),
+                                        start = s,
+                                        end = e,
+                                        strokeWidth = strokeWidth,
+                                        cap = StrokeCap.Round,
+                                        pathEffect = pathEffect
+                                    )
+                                }
+                                AnnotationShapeType.ARROW -> {
+                                    drawLine(
+                                        color = selectedColor.copy(alpha = annotationOpacity),
+                                        start = s,
+                                        end = e,
+                                        strokeWidth = strokeWidth,
+                                        cap = StrokeCap.Round,
+                                        pathEffect = pathEffect
+                                    )
+                                    val angle = atan2((e.y - s.y).toDouble(), (e.x - s.x).toDouble())
+                                    val arrowSize = (strokeWidth * 3.5f).coerceIn(20f, 45f)
+                                    val x1 = e.x - arrowSize * cos(angle - PI / 6).toFloat()
+                                    val y1 = e.y - arrowSize * sin(angle - PI / 6).toFloat()
+                                    val x2 = e.x - arrowSize * cos(angle + PI / 6).toFloat()
+                                    val y2 = e.y - arrowSize * sin(angle + PI / 6).toFloat()
+                                    drawLine(color = selectedColor.copy(alpha = annotationOpacity), start = e, end = Offset(x1, y1), strokeWidth = strokeWidth, cap = StrokeCap.Round)
+                                    drawLine(color = selectedColor.copy(alpha = annotationOpacity), start = e, end = Offset(x2, y2), strokeWidth = strokeWidth, cap = StrokeCap.Round)
                                 }
                             }
                         }
@@ -1156,6 +1441,248 @@ fun EditPdfScreen(
             containerColor = Color(0xFF1E1E1E)
         )
     }
+
+    // Digital Signature Capture Dialog
+    if (showSignatureDialog) {
+        SignatureCaptureDialog(
+            onDismissRequest = { showSignatureDialog = false },
+            onSignatureCaptured = { capturedStrokes, inkColor ->
+                currentPage?.let { p ->
+                    if (capturedStrokes.isNotEmpty()) {
+                        val allPoints = capturedStrokes.flatten()
+                        val minX = allPoints.minOf { it.x }
+                        val maxX = allPoints.maxOf { it.x }
+                        val minY = allPoints.minOf { it.y }
+                        val maxY = allPoints.maxOf { it.y }
+                        val origW = (maxX - minX).coerceAtLeast(1f)
+                        val origH = (maxY - minY).coerceAtLeast(1f)
+
+                        val targetW = (canvasSize.width * 0.42f).coerceIn(120f, 320f)
+                        val scale = targetW / origW
+                        val targetH = origH * scale
+
+                        val targetCenterX = canvasSize.width * 0.65f
+                        val targetCenterY = canvasSize.height * 0.78f
+                        val offsetX = targetCenterX - targetW / 2f
+                        val offsetY = targetCenterY - targetH / 2f
+
+                        val newStrokes = capturedStrokes.map { strokeList ->
+                            val scaledPoints = strokeList.map { pt ->
+                                Offset(
+                                    x = (pt.x - minX) * scale + offsetX,
+                                    y = (pt.y - minY) * scale + offsetY
+                                )
+                            }
+                            PageAnnotation.Stroke(
+                                points = scaledPoints,
+                                color = inkColor,
+                                strokeWidth = 3.5f,
+                                opacity = 1.0f,
+                                isSignature = true
+                            )
+                        }
+                        pushUndo(p.id, currentAnnotations + newStrokes)
+                        Toast.makeText(context, "Signature placed on page", Toast.LENGTH_SHORT).show()
+                    }
+                }
+                showSignatureDialog = false
+            }
+        )
+    }
+}
+
+@Composable
+fun SignatureCaptureDialog(
+    onDismissRequest: () -> Unit,
+    onSignatureCaptured: (List<List<Offset>>, Color) -> Unit
+) {
+    val strokes = remember { mutableStateListOf<List<Offset>>() }
+    var currentStroke by remember { mutableStateOf<List<Offset>>(emptyList()) }
+    var selectedInkColor by remember { mutableStateOf(Color(0xFF0D47A1)) } // Default Royal Blue ink
+    val signatureColors = listOf(
+        Color(0xFF0D47A1) to "Blue",
+        Color(0xFF1A1A1A) to "Black",
+        Color(0xFF1B5E20) to "Green",
+        Color(0xFFB71C1C) to "Red"
+    )
+
+    AlertDialog(
+        onDismissRequest = onDismissRequest,
+        containerColor = Color(0xFF1E1E1E),
+        title = {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Outlined.Gesture,
+                        contentDescription = null,
+                        tint = ScannerGreen,
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        "Digital Signature",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 17.sp
+                    )
+                }
+                TextButton(
+                    onClick = {
+                        strokes.clear()
+                        currentStroke = emptyList()
+                    }
+                ) {
+                    Text("Clear", color = Color(0xFFFF5252), fontSize = 13.sp)
+                }
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                // Ink Color Options
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text("Ink Color:", color = Color.Gray, fontSize = 12.sp)
+                    signatureColors.forEach { (c, _) ->
+                        val isSelected = selectedInkColor == c
+                        Box(
+                            modifier = Modifier
+                                .size(26.dp)
+                                .clip(CircleShape)
+                                .background(c)
+                                .border(
+                                    width = if (isSelected) 2.5.dp else 1.dp,
+                                    color = if (isSelected) ScannerGreen else Color.DarkGray,
+                                    shape = CircleShape
+                                )
+                                .clickable { selectedInkColor = c }
+                        )
+                    }
+                }
+
+                // Interactive Signature Pad
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(200.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color(0xFFF9F9FB))
+                        .border(1.dp, Color(0xFF444444), RoundedCornerShape(12.dp))
+                        .pointerInput(Unit) {
+                            detectDragGestures(
+                                onDragStart = { offset ->
+                                    currentStroke = listOf(offset)
+                                },
+                                onDrag = { change, _ ->
+                                    change.consume()
+                                    currentStroke = currentStroke + change.position
+                                },
+                                onDragEnd = {
+                                    if (currentStroke.isNotEmpty()) {
+                                        strokes.add(currentStroke)
+                                        currentStroke = emptyList()
+                                    }
+                                },
+                                onDragCancel = {
+                                    currentStroke = emptyList()
+                                }
+                            )
+                        }
+                ) {
+                    androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
+                        // Guideline dashed baseline
+                        val baselineY = size.height * 0.75f
+                        drawLine(
+                            color = Color.LightGray,
+                            start = Offset(24f, baselineY),
+                            end = Offset(size.width - 24f, baselineY),
+                            strokeWidth = 1.5f,
+                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 10f), 0f)
+                        )
+
+                        // Render committed strokes with smooth quadratic Bézier
+                        strokes.forEach { pts ->
+                            if (pts.size > 1) {
+                                val p = androidx.compose.ui.graphics.Path()
+                                p.moveTo(pts[0].x, pts[0].y)
+                                for (i in 1 until pts.size) {
+                                    val prev = pts[i - 1]
+                                    val curr = pts[i]
+                                    val midX = (prev.x + curr.x) / 2f
+                                    val midY = (prev.y + curr.y) / 2f
+                                    p.quadraticBezierTo(prev.x, prev.y, midX, midY)
+                                }
+                                p.lineTo(pts.last().x, pts.last().y)
+                                drawPath(
+                                    path = p,
+                                    color = selectedInkColor,
+                                    style = Stroke(width = 4.5f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+                                )
+                            }
+                        }
+
+                        // Render active stroke in progress
+                        if (currentStroke.size > 1) {
+                            val p = androidx.compose.ui.graphics.Path()
+                            p.moveTo(currentStroke[0].x, currentStroke[0].y)
+                            for (i in 1 until currentStroke.size) {
+                                val prev = currentStroke[i - 1]
+                                val curr = currentStroke[i]
+                                val midX = (prev.x + curr.x) / 2f
+                                val midY = (prev.y + curr.y) / 2f
+                                p.quadraticBezierTo(prev.x, prev.y, midX, midY)
+                            }
+                            p.lineTo(currentStroke.last().x, currentStroke.last().y)
+                            drawPath(
+                                path = p,
+                                color = selectedInkColor,
+                                style = Stroke(width = 4.5f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+                            )
+                        }
+                    }
+
+                    if (strokes.isEmpty() && currentStroke.isEmpty()) {
+                        Text(
+                            text = "✍️ Sign here with your finger or stylus",
+                            color = Color.Gray,
+                            fontSize = 12.sp,
+                            modifier = Modifier.align(Alignment.Center)
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    if (strokes.isNotEmpty()) {
+                        onSignatureCaptured(strokes.toList(), selectedInkColor)
+                    }
+                },
+                enabled = strokes.isNotEmpty(),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = ScannerGreen,
+                    disabledContainerColor = Color.DarkGray
+                )
+            ) {
+                Text("Place on Document", color = Color.White, fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismissRequest) {
+                Text("Cancel", color = Color.LightGray)
+            }
+        }
+    )
 }
 
 @Composable

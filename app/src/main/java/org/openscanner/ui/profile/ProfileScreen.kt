@@ -740,9 +740,13 @@ fun RealCloudSyncDialog(
     var localFolderName by remember { mutableStateOf("Not selected") }
 
     // Sub-dialogs for account credentials
+    var showGoogleDriveOptionsDialog by remember { mutableStateOf(false) }
+    var showGoogleDeveloperErrorDialog by remember { mutableStateOf(false) }
     var showDropboxDialog by remember { mutableStateOf(false) }
     var showOneDriveDialog by remember { mutableStateOf(false) }
     var showWebDavDialog by remember { mutableStateOf(false) }
+
+    val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
 
     fun refreshProviderStatuses() {
         coroutineScope.launch {
@@ -767,6 +771,27 @@ fun RealCloudSyncDialog(
         refreshProviderStatuses()
     }
 
+    // Google Drive SAF Directory Picker Launcher
+    val gdriveSafFolderLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            try {
+                val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                context.contentResolver.takePersistableUriPermission(uri, flags)
+                val docFile = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, uri)
+                val folderName = docFile?.name ?: "Google Drive Folder"
+                coroutineScope.launch {
+                    cloudSyncManager.googleDriveProvider.saveSafDriveFolder(uri, folderName)
+                    refreshProviderStatuses()
+                    Toast.makeText(context, "Google Drive connected: $folderName", Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: Exception) {
+                Toast.makeText(context, "Google Drive folder error: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
     // Google Sign-In Activity Result Launcher
     val googleSignInLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
@@ -780,6 +805,12 @@ fun RealCloudSyncDialog(
                     refreshProviderStatuses()
                     Toast.makeText(context, "Google Drive connected: ${account.email}", Toast.LENGTH_SHORT).show()
                 }
+            }
+        } catch (e: com.google.android.gms.common.api.ApiException) {
+            if (e.statusCode == 10 || e.statusCode == com.google.android.gms.common.api.CommonStatusCodes.DEVELOPER_ERROR) {
+                showGoogleDeveloperErrorDialog = true
+            } else {
+                Toast.makeText(context, "Google Sign-In error (${e.statusCode}): ${e.message}", Toast.LENGTH_LONG).show()
             }
         } catch (e: Exception) {
             Toast.makeText(context, "Google Drive sign-in: ${e.message}", Toast.LENGTH_SHORT).show()
@@ -849,11 +880,7 @@ fun RealCloudSyncDialog(
                                 refreshProviderStatuses()
                             }
                         } else {
-                            try {
-                                googleSignInLauncher.launch(cloudSyncManager.googleDriveProvider.getSignInIntent())
-                            } catch (e: Exception) {
-                                Toast.makeText(context, "Failed to launch Google Sign-In: ${e.message}", Toast.LENGTH_SHORT).show()
-                            }
+                            showGoogleDriveOptionsDialog = true
                         }
                     }
                 )
@@ -1068,6 +1095,268 @@ fun RealCloudSyncDialog(
         },
         containerColor = Color(0xFF1E1E1E)
     )
+
+    // Sub-Dialog 1: Google Drive Connection Method Selector
+    if (showGoogleDriveOptionsDialog) {
+        var showManualInput by remember { mutableStateOf(false) }
+        var webClientIdInput by remember { mutableStateOf("") }
+        var tokenInput by remember { mutableStateOf("") }
+
+        AlertDialog(
+            onDismissRequest = { showGoogleDriveOptionsDialog = false },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.CloudQueue, contentDescription = null, tint = ScannerGreen)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Connect Google Drive", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                }
+            },
+            text = {
+                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                    Text(
+                        text = "Choose your preferred way to sync scans with Google Drive:",
+                        color = Color.LightGray,
+                        fontSize = 12.sp
+                    )
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    // Option A: Android System Drive Picker (Recommended - Zero Setup)
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = Color(0xFF142419),
+                        border = BorderStroke(1.dp, ScannerGreen.copy(alpha = 0.6f)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                showGoogleDriveOptionsDialog = false
+                                gdriveSafFolderLauncher.launch(null)
+                            }
+                    ) {
+                        Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.FolderShared, contentDescription = null, tint = ScannerGreen, modifier = Modifier.size(28.dp))
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text("Select Drive Folder", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Surface(shape = RoundedCornerShape(4.dp), color = ScannerGreen) {
+                                        Text("INSTANT", color = Color.Black, fontSize = 9.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp))
+                                    }
+                                }
+                                Text("No developer account or SHA-1 setup needed. Uses phone's Google Drive app directly.", color = Color.LightGray, fontSize = 11.sp)
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Option B: 1-Tap Google Play Services Sign-In
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = Color(0xFF161616),
+                        border = BorderStroke(0.5.dp, Color(0xFF333333)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                showGoogleDriveOptionsDialog = false
+                                try {
+                                    googleSignInLauncher.launch(cloudSyncManager.googleDriveProvider.getSignInIntent())
+                                } catch (e: Exception) {
+                                    Toast.makeText(context, "Sign-In error: ${e.message}", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                    ) {
+                        Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.AccountCircle, contentDescription = null, tint = Color.White, modifier = Modifier.size(28.dp))
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Google Play Sign-In (1-Tap)", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                Text("Requires registered SHA-1 in Google Cloud Console.", color = Color.Gray, fontSize = 11.sp)
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Option C: Manual Token or Web Client ID
+                    if (!showManualInput) {
+                        TextButton(
+                            onClick = { showManualInput = true },
+                            modifier = Modifier.align(Alignment.CenterHorizontally)
+                        ) {
+                            Text("Advanced: Enter Client ID or OAuth Token", color = ScannerGreen, fontSize = 12.sp)
+                        }
+                    } else {
+                        OutlinedTextField(
+                            value = webClientIdInput,
+                            onValueChange = { webClientIdInput = it },
+                            label = { Text("Web Client ID (optional)") },
+                            singleLine = true,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = Color.White,
+                                unfocusedTextColor = Color.White,
+                                focusedBorderColor = ScannerGreen
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        OutlinedTextField(
+                            value = tokenInput,
+                            onValueChange = { tokenInput = it },
+                            label = { Text("OAuth Bearer Access Token (optional)") },
+                            singleLine = true,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = Color.White,
+                                unfocusedTextColor = Color.White,
+                                focusedBorderColor = ScannerGreen
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Button(
+                            onClick = {
+                                coroutineScope.launch {
+                                    if (tokenInput.isNotBlank()) {
+                                        cloudSyncManager.googleDriveProvider.saveAuthToken(tokenInput)
+                                    }
+                                    if (webClientIdInput.isNotBlank()) {
+                                        cloudSyncManager.googleDriveProvider.saveWebClientId(webClientIdInput)
+                                    }
+                                    refreshProviderStatuses()
+                                    showGoogleDriveOptionsDialog = false
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = ScannerGreen),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Save Advanced Configuration", color = Color.White)
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { showGoogleDriveOptionsDialog = false }) {
+                    Text("Cancel", color = Color.Gray)
+                }
+            },
+            containerColor = Color(0xFF1E1E1E)
+        )
+    }
+
+    // Sub-Dialog 2: Google Sign-In Developer Error (Error 10) Resolution Assistant
+    if (showGoogleDeveloperErrorDialog) {
+        AlertDialog(
+            onDismissRequest = { showGoogleDeveloperErrorDialog = false },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Info, contentDescription = null, tint = Color(0xFFFFB300))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Google Sign-In: Error 10", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                }
+            },
+            text = {
+                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                    Text(
+                        text = "Google Play Services returned error 10 (DEVELOPER_ERROR).",
+                        color = Color(0xFFFFB300),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "This occurs because Google Cloud Console requires registering this build's SHA-1 certificate before allowing 1-tap Google Play sign-in.",
+                        color = Color.LightGray,
+                        fontSize = 12.sp
+                    )
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    Text("INSTANT FIX (NO SETUP REQUIRED)", color = ScannerGreen, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Button(
+                        onClick = {
+                            showGoogleDeveloperErrorDialog = false
+                            gdriveSafFolderLauncher.launch(null)
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = ScannerGreen),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.FolderShared, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Connect Drive via System Picker", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    }
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    Text("DEVELOPER CREDENTIALS FOR GOOGLE CLOUD", color = Color.Gray, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    // Package Name Card
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = Color(0xFF121212),
+                        border = BorderStroke(0.5.dp, Color(0xFF333333)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Package Name", color = Color.Gray, fontSize = 10.sp)
+                                Text(GoogleDriveProvider.APP_PACKAGE_NAME, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                            }
+                            IconButton(onClick = {
+                                clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(GoogleDriveProvider.APP_PACKAGE_NAME))
+                                Toast.makeText(context, "Package Name copied!", Toast.LENGTH_SHORT).show()
+                            }) {
+                                Icon(Icons.Default.ContentCopy, contentDescription = "Copy", tint = ScannerGreen, modifier = Modifier.size(16.dp))
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    // SHA-1 Card
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = Color(0xFF121212),
+                        border = BorderStroke(0.5.dp, Color(0xFF333333)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Debug SHA-1 Fingerprint", color = Color.Gray, fontSize = 10.sp)
+                                Text(GoogleDriveProvider.DEBUG_SHA1, color = Color.White, fontSize = 11.sp, maxLines = 1)
+                            }
+                            IconButton(onClick = {
+                                clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(GoogleDriveProvider.DEBUG_SHA1))
+                                Toast.makeText(context, "SHA-1 copied to clipboard!", Toast.LENGTH_SHORT).show()
+                            }) {
+                                Icon(Icons.Default.ContentCopy, contentDescription = "Copy", tint = ScannerGreen, modifier = Modifier.size(16.dp))
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = { showGoogleDeveloperErrorDialog = false },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF333333))
+                ) {
+                    Text("Close", color = Color.White)
+                }
+            },
+            containerColor = Color(0xFF1E1E1E)
+        )
+    }
 
     // Sub-Dialog: Dropbox Access Token
     if (showDropboxDialog) {

@@ -24,6 +24,20 @@ Java_org_openscanner_cv_ThorvgEngine_nativeRenderStroke(
 );
 
 JNIEXPORT jboolean JNICALL
+Java_org_openscanner_cv_ThorvgEngine_nativeRenderSmoothVectorStroke(
+    JNIEnv* env,
+    jclass clazz,
+    jobject bitmap,
+    jfloatArray points,
+    jfloat strokeWidth,
+    jint r,
+    jint g,
+    jint b,
+    jint a,
+    jboolean isCubicSmoothed
+);
+
+JNIEXPORT jboolean JNICALL
 Java_org_openscanner_cv_ThorvgEngine_nativeRenderShape(
     JNIEnv* env,
     jclass clazz,
@@ -39,6 +53,34 @@ Java_org_openscanner_cv_ThorvgEngine_nativeRenderShape(
     jint b,
     jint a,
     jboolean isFilled
+);
+
+JNIEXPORT jboolean JNICALL
+Java_org_openscanner_cv_ThorvgEngine_nativeRenderStyledShape(
+    JNIEnv* env,
+    jclass clazz,
+    jobject bitmap,
+    jint shapeType,
+    jfloat x1,
+    jfloat y1,
+    jfloat x2,
+    jfloat y2,
+    jfloat strokeWidth,
+    jint strokeR,
+    jint strokeG,
+    jint strokeB,
+    jint strokeA,
+    jint fillType,
+    jint fillR1,
+    jint fillG1,
+    jint fillB1,
+    jint fillA1,
+    jint fillR2,
+    jint fillG2,
+    jint fillB2,
+    jint fillA2,
+    jint dashStyle,
+    jfloat cornerRadius
 );
 
 JNIEXPORT jboolean JNICALL
