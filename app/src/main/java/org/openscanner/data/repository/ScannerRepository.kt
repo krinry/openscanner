@@ -333,7 +333,13 @@ class ScannerRepository(
     suspend fun getPagesListForDocument(docId: Long): List<Page> = pageDao.getPagesListForDocument(docId)
 
     suspend fun createNewDocument(title: String? = null, folderId: Long = -1L): Long = withContext(Dispatchers.IO) {
-        val defaultTitle = title ?: ("New Doc " + SimpleDateFormat("MM-dd-yyyy HH.mm", Locale.getDefault()).format(Date()))
+        val defaultTitle = title?.ifBlank { null }
+            ?: try {
+                SettingsManager.getInstance(context).generateDocumentTitle().ifBlank { null }
+            } catch (e: Exception) {
+                null
+            }
+            ?: ("New Doc " + SimpleDateFormat("MM-dd-yyyy HH.mm", Locale.getDefault()).format(Date()))
         val doc = Document(title = defaultTitle, folderId = folderId)
         documentDao.insertDocument(doc)
     }

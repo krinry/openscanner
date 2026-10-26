@@ -618,13 +618,14 @@ fun DocumentDetailScreen(
             onExtractText = {
                 isOcrExtracting = true
                 showShareExportSheet = false
+                val selectedLang = org.openscanner.data.repository.SettingsManager.getInstance(context).ocrLanguage.value
                 coroutineScope.launch(Dispatchers.IO) {
                     val fullText = StringBuilder()
                     for (p in pagesToShare) {
                         val bmp = BitmapFactory.decodeFile(p.processedImagePath)
                         if (bmp != null) {
                             try {
-                                val recognized = OcrEngine.recognizeText(bmp)
+                                val recognized = OcrEngine.recognizeText(bmp, language = selectedLang)
                                 if (recognized.isNotBlank()) {
                                     fullText.appendLine("--- Page ${p.pageIndex + 1} ---")
                                     fullText.appendLine(recognized)

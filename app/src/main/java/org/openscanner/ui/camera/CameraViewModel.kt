@@ -23,6 +23,8 @@ import org.openscanner.data.model.EnhanceMode
 import org.openscanner.cv.DocumentQuadrilateral
 import org.openscanner.cv.PointF
 import org.openscanner.data.repository.ScannerRepository
+import org.openscanner.data.repository.SettingsManager
+import android.media.MediaActionSound
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
@@ -63,10 +65,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val _selectedFilter = MutableStateFlow(1) // 1 = Magic Color (default)
     val selectedFilter: StateFlow<Int> = _selectedFilter
 
+    private val settingsManager = SettingsManager.getInstance(application)
+
     private val _cropAfterScan = MutableStateFlow(false)
     val cropAfterScan: StateFlow<Boolean> = _cropAfterScan
 
-    private val _autoCropEnabled = MutableStateFlow(true)
+    private val _autoCropEnabled = MutableStateFlow(settingsManager.autoCropEnabled.value)
     val autoCropEnabled: StateFlow<Boolean> = _autoCropEnabled
 
     private val _batchCount = MutableStateFlow(0)
@@ -132,6 +136,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun setAutoCropEnabled(enabled: Boolean) {
         _autoCropEnabled.value = enabled
+        settingsManager.setAutoCropEnabled(enabled)
     }
 
     fun addBatchItem(item: BatchCaptureItem) {
@@ -146,6 +151,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         onError: (Exception) -> Unit = {}
     ) {
         val context = getApplication<Application>()
+        if (settingsManager.shutterSoundEnabled.value) {
+            try {
+                MediaActionSound().play(MediaActionSound.SHUTTER_CLICK)
+            } catch (ignored: Exception) {}
+        }
         imageCapture.takePicture(
             ContextCompat.getMainExecutor(context),
             object : ImageCapture.OnImageCapturedCallback() {
@@ -299,6 +309,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         onError: (Exception) -> Unit
     ) {
         val context = getApplication<Application>()
+        if (settingsManager.shutterSoundEnabled.value) {
+            try {
+                MediaActionSound().play(MediaActionSound.SHUTTER_CLICK)
+            } catch (ignored: Exception) {}
+        }
         imageCapture.takePicture(
             ContextCompat.getMainExecutor(context),
             object : ImageCapture.OnImageCapturedCallback() {

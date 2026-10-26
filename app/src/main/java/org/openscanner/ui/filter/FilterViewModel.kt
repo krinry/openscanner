@@ -16,6 +16,7 @@ import org.openscanner.cv.DocumentQuadrilateral
 import org.openscanner.cv.NativeScannerEngine
 import org.openscanner.data.model.EnhanceMode
 import org.openscanner.data.repository.ScannerRepository
+import org.openscanner.data.repository.SettingsManager
 import org.openscanner.cv.OcrEngine
 import java.io.File
 import kotlin.math.max
@@ -140,15 +141,21 @@ class FilterViewModel(application: Application) : AndroidViewModel(application) 
                 enhanceModeId = _selectedMode.value.id
             )
 
-            // Trigger background OCR
-            launch {
-                try {
-                    val ocrResult = OcrEngine.recognizeText(finalHighResBmp)
-                    if (ocrResult.isNotBlank()) {
-                        repository.updatePage(savedPage.copy(ocrText = ocrResult))
+            // Trigger background OCR if enabled in settings
+            val settings = SettingsManager.getInstance(getApplication())
+            if (settings.autoOcrEnabled.value) {
+                launch {
+                    try {
+                        val ocrResult = OcrEngine.recognizeText(
+                            bitmap = finalHighResBmp,
+                            language = settings.ocrLanguage.value
+                        )
+                        if (ocrResult.isNotBlank()) {
+                            repository.updatePage(savedPage.copy(ocrText = ocrResult))
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
                     }
-                } catch (e: Exception) {
-                    e.printStackTrace()
                 }
             }
 

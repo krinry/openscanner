@@ -51,9 +51,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.openscanner.OpenScannerApp
+import org.openscanner.cv.ThorvgEngine
 import org.openscanner.data.model.Document
 import org.openscanner.data.model.Page
 import org.openscanner.data.repository.ScannerRepository
+import org.openscanner.ink.InkStrokeManager
 import org.openscanner.pdf.PdfExportOptions
 import org.openscanner.pdf.PdfGenerator
 import org.openscanner.pdf.PdfPageSize
@@ -219,116 +221,124 @@ fun EditPdfScreen(
         pageAnnotations = pageAnnotations + (pageId to nextState)
     }
 
-    // Save baked annotations to storage files
+    // Save baked annotations to storage files using ThorVG vector rasterizer
     suspend fun saveAnnotatedPages(): Boolean = withContext(Dispatchers.IO) {
-        if (pageAnnotations.isEmpty()) return@withContext true
+        val activeWatermark = exportWatermark.ifBlank { null }
+        if (pageAnnotations.isEmpty() && activeWatermark == null) return@withContext true
         try {
-            for ((pId, annotations) in pageAnnotations) {
-                if (annotations.isEmpty()) continue
-                val p = pages.find { it.id == pId } ?: continue
+            val pagesToProcess = if (activeWatermark == null) {
+                pages.filter { pageAnnotations[it.id]?.isNotEmpty() == true }
+            } else {
+                pages
+            }
+
+            for (p in pagesToProcess) {
+                val annotations = pageAnnotations[p.id] ?: emptyList()
                 val file = File(p.processedImagePath)
                 if (!file.exists()) continue
 
                 val baseBmp = BitmapFactory.decodeFile(file.absolutePath) ?: continue
                 val mutableBmp = baseBmp.copy(Bitmap.Config.ARGB_8888, true)
-                val canvas = android.graphics.Canvas(mutableBmp)
 
                 val bmpW = mutableBmp.width.toFloat()
                 val bmpH = mutableBmp.height.toFloat()
+                val sx = bmpW / canvasSize.width.coerceAtLeast(1)
+                val sy = bmpH / canvasSize.height.coerceAtLeast(1)
 
-                // Render each annotation scaled to bitmap dimensions
+                // Render each annotation using ThorVG high-performance vector engine
                 annotations.forEach { item ->
                     when (item) {
                         is PageAnnotation.Stroke -> {
-                            val paint = Paint().apply {
-                                isAntiAlias = true
-                                style = Paint.Style.STROKE
-                                strokeCap = Paint.Cap.ROUND
-                                strokeJoin = Paint.Join.ROUND
-                                color = item.color.toArgb()
-                                strokeWidth = item.strokeWidth * (bmpW / (canvasSize.width.coerceAtLeast(1)))
-                                if (item.isHighlighter) {
-                                    alpha = (item.color.alpha * 120).toInt().coerceIn(40, 180)
-                                } else if (item.isSmudge) {
-                                    color = android.graphics.Color.DKGRAY
-                                    alpha = 235
+                            val scaledWidth = item.strokeWidth * sx
+                            if (item.isSmudge) {
+                                // Apply high-speed Gaussian/smudge blur directly on the stroke's bounding area
+                                if (item.points.isNotEmpty()) {
+                                    val minX = (item.points.minOf { it.x } * sx - scaledWidth).toInt().coerceAtLeast(0)
+                                    val minY = (item.points.minOf { it.y } * sy - scaledWidth).toInt().coerceAtLeast(0)
+                                    val maxX = (item.points.maxOf { it.x } * sx + scaledWidth).toInt().coerceAtMost(mutableBmp.width)
+                                    val maxY = (item.points.maxOf { it.y } * sy + scaledWidth).toInt().coerceAtMost(mutableBmp.height)
+                                    ThorvgEngine.applySmudgeBlur(
+                                        bitmap = mutableBmp,
+                                        left = minX,
+                                        top = minY,
+                                        right = maxX,
+                                        bottom = maxY,
+                                        radius = (scaledWidth * 0.7f).toInt().coerceIn(6, 32)
+                                    )
                                 }
-                            }
-                            if (item.points.size > 1) {
-                                val path = Path()
-                                val sx = bmpW / canvasSize.width.coerceAtLeast(1)
-                                val sy = bmpH / canvasSize.height.coerceAtLeast(1)
-                                path.moveTo(item.points[0].x * sx, item.points[0].y * sy)
-                                for (i in 1 until item.points.size) {
-                                    path.lineTo(item.points[i].x * sx, item.points[i].y * sy)
+                            } else {
+                                val flatPoints = FloatArray(item.points.size * 2)
+                                for (i in item.points.indices) {
+                                    flatPoints[i * 2] = item.points[i].x * sx
+                                    flatPoints[i * 2 + 1] = item.points[i].y * sy
                                 }
-                                canvas.drawPath(path, paint)
+                                val strokeColor = if (item.isHighlighter) {
+                                    item.color.copy(alpha = 0.45f)
+                                } else {
+                                    item.color
+                                }
+                                ThorvgEngine.renderStroke(
+                                    bitmap = mutableBmp,
+                                    points = flatPoints,
+                                    strokeWidth = scaledWidth,
+                                    color = strokeColor
+                                )
                             }
                         }
                         is PageAnnotation.Shape -> {
-                            val paint = Paint().apply {
-                                isAntiAlias = true
-                                color = item.color.toArgb()
-                                strokeWidth = item.strokeWidth * (bmpW / canvasSize.width.coerceAtLeast(1))
-                                style = if (item.isFilled) Paint.Style.FILL else Paint.Style.STROKE
+                            val shapeType = when (item.shapeType) {
+                                AnnotationShapeType.RECTANGLE -> ThorvgEngine.ShapeType.RECTANGLE
+                                AnnotationShapeType.FILLED_RECT -> ThorvgEngine.ShapeType.FILLED_BOX
+                                AnnotationShapeType.CIRCLE -> ThorvgEngine.ShapeType.CIRCLE
+                                AnnotationShapeType.LINE -> ThorvgEngine.ShapeType.LINE
+                                AnnotationShapeType.ARROW -> ThorvgEngine.ShapeType.ARROW
                             }
-                            val sx = bmpW / canvasSize.width.coerceAtLeast(1)
-                            val sy = bmpH / canvasSize.height.coerceAtLeast(1)
-                            val left = minOf(item.start.x, item.end.x) * sx
-                            val top = minOf(item.start.y, item.end.y) * sy
-                            val right = maxOf(item.start.x, item.end.x) * sx
-                            val bottom = maxOf(item.start.y, item.end.y) * sy
-
-                            when (item.shapeType) {
-                                AnnotationShapeType.RECTANGLE, AnnotationShapeType.FILLED_RECT -> {
-                                    canvas.drawRect(left, top, right, bottom, paint)
-                                }
-                                AnnotationShapeType.CIRCLE -> {
-                                    canvas.drawOval(RectF(left, top, right, bottom), paint)
-                                }
-                                AnnotationShapeType.LINE -> {
-                                    canvas.drawLine(item.start.x * sx, item.start.y * sy, item.end.x * sx, item.end.y * sy, paint)
-                                }
-                                AnnotationShapeType.ARROW -> {
-                                    val startX = item.start.x * sx
-                                    val startY = item.start.y * sy
-                                    val endX = item.end.x * sx
-                                    val endY = item.end.y * sy
-                                    canvas.drawLine(startX, startY, endX, endY, paint)
-                                    val angle = atan2((endY - startY).toDouble(), (endX - startX).toDouble())
-                                    val arrowSize = 36f
-                                    val x1 = endX - arrowSize * cos(angle - PI / 6).toFloat()
-                                    val y1 = endY - arrowSize * sin(angle - PI / 6).toFloat()
-                                    val x2 = endX - arrowSize * cos(angle + PI / 6).toFloat()
-                                    val y2 = endY - arrowSize * sin(angle + PI / 6).toFloat()
-                                    canvas.drawLine(endX, endY, x1, y1, paint)
-                                    canvas.drawLine(endX, endY, x2, y2, paint)
-                                }
-                            }
+                            ThorvgEngine.renderShape(
+                                bitmap = mutableBmp,
+                                shapeType = shapeType,
+                                x1 = item.start.x * sx,
+                                y1 = item.start.y * sy,
+                                x2 = item.end.x * sx,
+                                y2 = item.end.y * sy,
+                                strokeWidth = item.strokeWidth * sx,
+                                color = item.color,
+                                isFilled = item.isFilled
+                            )
                         }
                         is PageAnnotation.Text -> {
                             val paint = Paint().apply {
                                 isAntiAlias = true
                                 color = item.color.toArgb()
-                                textSize = item.fontSize * (bmpW / canvasSize.width.coerceAtLeast(1))
+                                textSize = item.fontSize * sx
                                 typeface = android.graphics.Typeface.DEFAULT_BOLD
                             }
-                            val sx = bmpW / canvasSize.width.coerceAtLeast(1)
-                            val sy = bmpH / canvasSize.height.coerceAtLeast(1)
+                            val canvas = android.graphics.Canvas(mutableBmp)
                             canvas.drawText(item.text, item.position.x * sx, item.position.y * sy, paint)
                         }
                     }
                 }
 
-                // Write back to file
+                // Render vector watermark using ThorVG SVG capabilities if specified
+                val watermark = activeWatermark ?: p.watermarkText
+                if (!watermark.isNullOrBlank()) {
+                    ThorvgEngine.renderWatermark(
+                        bitmap = mutableBmp,
+                        text = watermark,
+                        angle = -35f,
+                        opacity = 0.28f,
+                        colorHex = "#9E9E9E"
+                    )
+                }
+
+                // Write back high-res processed image
                 FileOutputStream(file).use { out ->
-                    mutableBmp.compress(Bitmap.CompressFormat.JPEG, 92, out)
+                    mutableBmp.compress(Bitmap.CompressFormat.JPEG, 94, out)
                 }
                 val thumbFile = File(p.thumbnailPath)
                 if (thumbFile.exists()) {
                     val thumb = Bitmap.createScaledBitmap(mutableBmp, 240, (240f * mutableBmp.height / mutableBmp.width).toInt().coerceAtLeast(1), true)
                     FileOutputStream(thumbFile).use { out ->
-                        thumb.compress(Bitmap.CompressFormat.JPEG, 80, out)
+                        thumb.compress(Bitmap.CompressFormat.JPEG, 82, out)
                     }
                     if (!thumb.isRecycled) thumb.recycle()
                 }

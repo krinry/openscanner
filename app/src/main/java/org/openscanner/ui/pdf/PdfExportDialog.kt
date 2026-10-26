@@ -28,7 +28,16 @@ fun PdfExportDialog(
     onShare: (PdfExportOptions) -> Unit
 ) {
     val colors = ScannerTheme.colors
-    var selectedPageSize by remember { mutableStateOf(PdfPageSize.A4) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val settingsManager = remember { org.openscanner.data.repository.SettingsManager.getInstance(context) }
+    val initialSize = remember {
+        when (settingsManager.defaultPdfSize.value) {
+            "US Letter" -> PdfPageSize.LETTER
+            "Fit to Document" -> PdfPageSize.FIT_IMAGE
+            else -> PdfPageSize.A4
+        }
+    }
+    var selectedPageSize by remember { mutableStateOf(initialSize) }
     var selectedQuality by remember { mutableStateOf(PdfQuality.MEDIUM) }
     var watermarkText by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }

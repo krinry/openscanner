@@ -3,9 +3,11 @@ package org.openscanner.ui.profile
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -22,16 +24,22 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import kotlinx.coroutines.delay
+import coil.compose.AsyncImage
+import com.google.android.gms.auth.api.signin.GoogleSignIn
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import org.openscanner.cloud.*
+import org.openscanner.data.repository.SettingsManager
+import org.openscanner.data.repository.StorageCalculator
+import org.openscanner.data.repository.StorageStats
 import org.openscanner.ui.theme.ScannerGreen
 import java.io.File
 
@@ -42,12 +50,50 @@ fun ProfileScreen(
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
-    val prefs = remember { context.getSharedPreferences("openscanner_profile", Context.MODE_PRIVATE) }
+    val settingsManager = remember { SettingsManager.getInstance(context) }
+    val cloudSyncManager = remember { CloudSyncManager(context) }
 
-    var userName by remember { mutableStateOf(prefs.getString("user_name", "krishna namdev") ?: "krishna namdev") }
-    var userTier by remember { mutableStateOf(prefs.getString("user_tier", "Basic") ?: "Basic") }
+    // Reactive State from SettingsManager
+    val userName by settingsManager.userName.collectAsState()
+    val userTier by settingsManager.userTier.collectAsState()
+    val avatarPath by settingsManager.avatarPath.collectAsState()
+
+    // Real Live Storage Stats
+    var storageStats by remember { mutableStateOf<StorageStats?>(null) }
+    fun refreshStorage() {
+        coroutineScope.launch {
+            storageStats = StorageCalculator.calculate(context)
+        }
+    }
+    LaunchedEffect(Unit) {
+        refreshStorage()
+    }
+
+    // Avatar Picker Launcher
+    val photoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            coroutineScope.launch(Dispatchers.IO) {
+                try {
+                    val avatarFile = File(context.filesDir, "profile_avatar.jpg")
+                    context.contentResolver.openInputStream(uri)?.use { inStream ->
+                        avatarFile.outputStream().use { outStream ->
+                            inStream.copyTo(outStream)
+                        }
+                    }
+                    settingsManager.setAvatarPath(avatarFile.absolutePath)
+                } catch (e: Exception) {
+                    coroutineScope.launch(Dispatchers.Main) {
+                        Toast.makeText(context, "Failed to save avatar: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+        }
+    }
 
     // Dialog states
+    var showAvatarOptionsDialog by remember { mutableStateOf(false) }
     var showEditNameDialog by remember { mutableStateOf(false) }
     var showSyncDialog by remember { mutableStateOf(false) }
     var showScanSettingsDialog by remember { mutableStateOf(false) }
@@ -91,7 +137,7 @@ fun ProfileScreen(
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp, vertical = 8.dp)
         ) {
-            // 1. User Profile & Cloud Space Header Card
+            // 1. User Profile & Live Storage Header Card
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -103,45 +149,54 @@ fun ProfileScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        // User Avatar
+                        // User Avatar (Custom photo or dynamic initials badge)
                         Box(
                             modifier = Modifier
-                                .size(56.dp)
+                                .size(60.dp)
                                 .clip(CircleShape)
-                                .background(Color(0xFFE8F5E9)),
+                                .background(Color(0xFF1E2822))
+                                .clickable { showAvatarOptionsDialog = true },
                             contentAlignment = Alignment.Center
                         ) {
-                            Canvas(modifier = Modifier.size(56.dp)) {
-                                val w = size.width
-                                val h = size.height
+                            val avatarFile = avatarPath?.let { File(it) }
+                            if (avatarFile != null && avatarFile.exists()) {
+                                AsyncImage(
+                                    model = avatarFile,
+                                    contentDescription = "Profile Photo",
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            } else {
+                                // Initials Fallback
+                                val initials = userName.split(" ")
+                                    .filter { it.isNotBlank() }
+                                    .take(2)
+                                    .map { it.first().uppercaseChar() }
+                                    .joinToString("")
+                                    .ifEmpty { "OS" }
 
-                                // Face / Head
-                                drawCircle(
-                                    color = Color(0xFFFFD1A4),
-                                    radius = w * 0.22f,
-                                    center = Offset(w * 0.5f, h * 0.38f)
-                                )
-                                // Hair
-                                drawCircle(
-                                    color = Color(0xFF4A3728),
-                                    radius = w * 0.22f,
-                                    center = Offset(w * 0.5f, h * 0.28f)
-                                )
-                                // Green Shirt Body
-                                drawArc(
+                                Text(
+                                    text = initials,
                                     color = ScannerGreen,
-                                    startAngle = 0f,
-                                    sweepAngle = 180f,
-                                    useCenter = true,
-                                    topLeft = Offset(w * 0.12f, h * 0.60f),
-                                    size = androidx.compose.ui.geometry.Size(w * 0.76f, h * 0.70f)
+                                    fontSize = 20.sp,
+                                    fontWeight = FontWeight.Bold
                                 )
-                                // Collar
-                                drawLine(
-                                    color = Color.White,
-                                    start = Offset(w * 0.5f, h * 0.60f),
-                                    end = Offset(w * 0.5f, h * 0.76f),
-                                    strokeWidth = 3f
+                            }
+
+                            // Camera edit icon indicator
+                            Box(
+                                modifier = Modifier
+                                    .size(20.dp)
+                                    .align(Alignment.BottomEnd)
+                                    .clip(CircleShape)
+                                    .background(ScannerGreen),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    Icons.Default.CameraAlt,
+                                    contentDescription = "Change Avatar",
+                                    tint = Color.Black,
+                                    modifier = Modifier.size(12.dp)
                                 )
                             }
                         }
@@ -170,12 +225,14 @@ fun ProfileScreen(
 
                             Spacer(modifier = Modifier.height(4.dp))
 
-                            // Basic Badge with Crown
+                            // Tier Badge
                             Surface(
                                 shape = RoundedCornerShape(4.dp),
                                 color = Color(0xFF1E2822),
                                 border = BorderStroke(0.5.dp, ScannerGreen.copy(alpha = 0.5f)),
-                                modifier = Modifier.padding(vertical = 2.dp)
+                                modifier = Modifier
+                                    .clickable { showEditNameDialog = true }
+                                    .padding(vertical = 2.dp)
                             ) {
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
@@ -201,19 +258,23 @@ fun ProfileScreen(
 
                     Spacer(modifier = Modifier.height(20.dp))
 
-                    // Cloud Space Row
+                    // Real Storage Calculation Row
+                    val stats = storageStats
+                    val appUsed = stats?.appUsedFormatted ?: "Calculating..."
+                    val freeDev = stats?.freeDeviceFormatted ?: "..."
+
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "Cloud Space",
+                            text = "Storage Used",
                             color = Color(0xFFAAAAAA),
                             fontSize = 13.sp
                         )
                         Text(
-                            text = "793.28MB/10.00GB",
+                            text = "$appUsed / $freeDev Free",
                             color = ScannerGreen,
                             fontSize = 13.sp,
                             fontWeight = FontWeight.SemiBold
@@ -222,9 +283,10 @@ fun ProfileScreen(
 
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    // Progress Bar
+                    // Real Live Progress Indicator
+                    val progressVal = stats?.usageFraction ?: 0.05f
                     LinearProgressIndicator(
-                        progress = { 0.08f },
+                        progress = { progressVal },
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(4.dp)
@@ -232,12 +294,23 @@ fun ProfileScreen(
                         color = ScannerGreen,
                         trackColor = Color(0xFF262626)
                     )
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    // Breakdown row
+                    val filesCount = stats?.totalFilesCount ?: 0
+                    val cacheSize = stats?.cacheFormatted ?: "0 B"
+                    Text(
+                        text = "$filesCount Scan files • Cache: $cacheSize",
+                        color = Color(0xFF777777),
+                        fontSize = 11.sp
+                    )
                 }
             }
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // 2. Action Section 1 (Sync, Scan, Doc Management, Doc Export, OCR language)
+            // 2. Action Section 1 (Sync, Scan Settings, Doc Management, Doc Export, OCR Language)
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -247,31 +320,36 @@ fun ProfileScreen(
                 Column {
                     ProfileMenuRow(
                         icon = Icons.Outlined.Sync,
-                        title = "Sync",
+                        title = "Sync & Cloud Storage",
+                        subtitle = "Google Drive, OneDrive, Dropbox, WebDAV, Local",
                         onClick = { showSyncDialog = true }
                     )
                     ProfileDivider()
                     ProfileMenuRow(
                         icon = Icons.Outlined.CropFree,
-                        title = "Scan",
+                        title = "Scan Settings",
+                        subtitle = "Grid, Shutter sound, Auto-crop",
                         onClick = { showScanSettingsDialog = true }
                     )
                     ProfileDivider()
                     ProfileMenuRow(
                         icon = Icons.Outlined.Description,
                         title = "Doc Management",
+                        subtitle = "Naming pattern, Auto-OCR",
                         onClick = { showDocManagementDialog = true }
                     )
                     ProfileDivider()
                     ProfileMenuRow(
                         icon = Icons.Outlined.FileUpload,
                         title = "Doc Export",
+                        subtitle = "Default PDF page format",
                         onClick = { showDocExportDialog = true }
                     )
                     ProfileDivider()
                     ProfileMenuRow(
                         icon = Icons.Outlined.Translate,
-                        title = "OCR language",
+                        title = "OCR Language",
+                        subtitle = settingsManager.ocrLanguage.collectAsState().value,
                         onClick = { showOcrLanguageDialog = true }
                     )
                 }
@@ -295,7 +373,7 @@ fun ProfileScreen(
                                 action = Intent.ACTION_SEND
                                 putExtra(
                                     Intent.EXTRA_TEXT,
-                                    "Try OpenScanner: Fast, privacy-first, offline document scanner with HD scan & multi-cloud sync! https://github.com/openscanner/openscanner"
+                                    "Try OpenScanner: Fast, privacy-first, offline document scanner with HD scan & multi-cloud sync! https://github.com/krinry/openscanner"
                                 )
                                 type = "text/plain"
                             }
@@ -306,6 +384,7 @@ fun ProfileScreen(
                     ProfileMenuRow(
                         icon = Icons.Outlined.CleaningServices,
                         title = "Free Up Memory",
+                        subtitle = "Clean temporary cache (${storageStats?.cacheFormatted ?: "0 B"})",
                         onClick = {
                             coroutineScope.launch {
                                 var freedBytes = 0L
@@ -316,7 +395,8 @@ fun ProfileScreen(
                                         file.deleteRecursively()
                                     }
                                 } catch (e: Exception) { /* Ignore */ }
-                                val mb = String.format("%.1f", freedBytes / (1024f * 1024f).coerceAtLeast(1f))
+                                refreshStorage()
+                                val mb = String.format("%.1f", freedBytes / (1024f * 1024f).coerceAtLeast(0.1f))
                                 Toast.makeText(context, "Memory Cleaned! Freed $mb MB cache.", Toast.LENGTH_SHORT).show()
                             }
                         }
@@ -325,6 +405,7 @@ fun ProfileScreen(
                     ProfileMenuRow(
                         icon = Icons.Outlined.ChatBubbleOutline,
                         title = "Feedback",
+                        subtitle = "Submit issue or feature request on GitHub",
                         onClick = { showFeedbackDialog = true }
                     )
                     ProfileDivider()
@@ -344,31 +425,28 @@ fun ProfileScreen(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(
-                    text = "Version: 1.0.0",
+                    text = "OpenScanner v1.0.0",
                     color = Color(0xFF666666),
                     fontSize = 12.sp
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "If you have any questions, please contact us.",
+                    text = "Open Source Document Vault • Clean-Room Native Vision",
                     color = Color(0xFF666666),
                     fontSize = 11.sp
                 )
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
-                    text = "support@openscanner.org",
+                    text = "github.com/krinry/openscanner",
                     color = ScannerGreen,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Medium,
                     modifier = Modifier.clickable {
                         try {
-                            val intent = Intent(Intent.ACTION_SENDTO).apply {
-                                data = Uri.parse("mailto:support@openscanner.org")
-                                putExtra(Intent.EXTRA_SUBJECT, "OpenScanner Support Inquiry")
-                            }
+                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/krinry/openscanner"))
                             context.startActivity(intent)
                         } catch (e: Exception) {
-                            Toast.makeText(context, "Contact: support@openscanner.org", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "https://github.com/krinry/openscanner", Toast.LENGTH_SHORT).show()
                         }
                     }
                 )
@@ -380,31 +458,93 @@ fun ProfileScreen(
 
     // --- Dialogs ---
 
-    // 1. Edit Name Dialog
+    // Avatar Selection Dialog
+    if (showAvatarOptionsDialog) {
+        AlertDialog(
+            onDismissRequest = { showAvatarOptionsDialog = false },
+            title = { Text("Profile Photo", color = Color.White, fontWeight = FontWeight.Bold) },
+            text = {
+                Column {
+                    ListItem(
+                        headlineContent = { Text("Choose from Gallery", color = Color.White) },
+                        leadingContent = { Icon(Icons.Default.PhotoLibrary, contentDescription = null, tint = ScannerGreen) },
+                        modifier = Modifier.clickable {
+                            showAvatarOptionsDialog = false
+                            photoPickerLauncher.launch(
+                                androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                            )
+                        },
+                        colors = ListItemDefaults.colors(containerColor = Color.Transparent)
+                    )
+                    if (avatarPath != null) {
+                        ListItem(
+                            headlineContent = { Text("Remove Photo", color = Color(0xFFFF5252)) },
+                            leadingContent = { Icon(Icons.Default.Delete, contentDescription = null, tint = Color(0xFFFF5252)) },
+                            modifier = Modifier.clickable {
+                                settingsManager.setAvatarPath(null)
+                                try {
+                                    File(context.filesDir, "profile_avatar.jpg").delete()
+                                } catch (e: Exception) {}
+                                showAvatarOptionsDialog = false
+                            },
+                            colors = ListItemDefaults.colors(containerColor = Color.Transparent)
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showAvatarOptionsDialog = false }) {
+                    Text("Cancel", color = Color.Gray)
+                }
+            },
+            containerColor = Color(0xFF1E1E1E)
+        )
+    }
+
+    // 1. Edit Name & Tier Dialog
     if (showEditNameDialog) {
         var tempName by remember { mutableStateOf(userName) }
+        var tempTier by remember { mutableStateOf(userTier) }
+
         AlertDialog(
             onDismissRequest = { showEditNameDialog = false },
-            title = { Text("Edit Profile Name", color = Color.White, fontWeight = FontWeight.Bold) },
+            title = { Text("Edit Profile", color = Color.White, fontWeight = FontWeight.Bold) },
             text = {
-                OutlinedTextField(
-                    value = tempName,
-                    onValueChange = { tempName = it },
-                    label = { Text("Your Name") },
-                    singleLine = true,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = Color.White,
-                        unfocusedTextColor = Color.White,
-                        focusedBorderColor = ScannerGreen,
-                        unfocusedBorderColor = Color.Gray
+                Column {
+                    OutlinedTextField(
+                        value = tempName,
+                        onValueChange = { tempName = it },
+                        label = { Text("Your Name") },
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color.White,
+                            focusedBorderColor = ScannerGreen,
+                            unfocusedBorderColor = Color.Gray
+                        ),
+                        modifier = Modifier.fillMaxWidth()
                     )
-                )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = tempTier,
+                        onValueChange = { tempTier = it },
+                        label = { Text("Status / Title (e.g. Pro, Offline Vault)") },
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color.White,
+                            focusedBorderColor = ScannerGreen,
+                            unfocusedBorderColor = Color.Gray
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
             },
             confirmButton = {
                 Button(
                     onClick = {
-                        userName = tempName.trim().ifEmpty { "krishna namdev" }
-                        prefs.edit().putString("user_name", userName).apply()
+                        settingsManager.setUserName(tempName)
+                        settingsManager.setUserTier(tempTier.trim().ifEmpty { "Basic" })
                         showEditNameDialog = false
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = ScannerGreen)
@@ -421,87 +561,54 @@ fun ProfileScreen(
         )
     }
 
-    // 2. Cloud Storage & Auto-Sync Dialog (Main requested feature!)
+    // 2. Real Cloud Storage & Auto-Sync Dialog
     if (showSyncDialog) {
-        CloudStorageSyncDialog(
-            prefs = prefs,
-            onDismiss = { showSyncDialog = false }
+        RealCloudSyncDialog(
+            cloudSyncManager = cloudSyncManager,
+            onDismiss = {
+                showSyncDialog = false
+                refreshStorage()
+            }
         )
     }
 
     // 3. Scan Settings Dialog
     if (showScanSettingsDialog) {
-        ScanSettingsDialog(
-            prefs = prefs,
+        RealScanSettingsDialog(
+            settingsManager = settingsManager,
             onDismiss = { showScanSettingsDialog = false }
         )
     }
 
     // 4. Document Management Dialog
     if (showDocManagementDialog) {
-        DocManagementDialog(
-            prefs = prefs,
+        RealDocManagementDialog(
+            settingsManager = settingsManager,
             onDismiss = { showDocManagementDialog = false }
         )
     }
 
     // 5. Document Export Dialog
     if (showDocExportDialog) {
-        DocExportDialog(
-            prefs = prefs,
+        RealDocExportDialog(
+            settingsManager = settingsManager,
             onDismiss = { showDocExportDialog = false }
         )
     }
 
     // 6. OCR Language Dialog
     if (showOcrLanguageDialog) {
-        OcrLanguageDialog(
-            prefs = prefs,
+        RealOcrLanguageDialog(
+            settingsManager = settingsManager,
             onDismiss = { showOcrLanguageDialog = false }
         )
     }
 
-    // 7. Feedback Dialog
+    // 7. Real GitHub Feedback Dialog
     if (showFeedbackDialog) {
-        var feedbackText by remember { mutableStateOf("") }
-        AlertDialog(
-            onDismissRequest = { showFeedbackDialog = false },
-            title = { Text("Send Feedback", color = Color.White, fontWeight = FontWeight.Bold) },
-            text = {
-                Column {
-                    Text("We'd love to hear your thoughts or issues:", color = Color.LightGray, fontSize = 13.sp)
-                    Spacer(modifier = Modifier.height(12.dp))
-                    OutlinedTextField(
-                        value = feedbackText,
-                        onValueChange = { feedbackText = it },
-                        placeholder = { Text("Describe your feedback or suggestion...") },
-                        modifier = Modifier.fillMaxWidth().height(120.dp),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedTextColor = Color.White,
-                            unfocusedTextColor = Color.White,
-                            focusedBorderColor = ScannerGreen,
-                            unfocusedBorderColor = Color.Gray
-                        )
-                    )
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        Toast.makeText(context, "Thank you for your feedback!", Toast.LENGTH_SHORT).show()
-                        showFeedbackDialog = false
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = ScannerGreen)
-                ) {
-                    Text("Submit", color = Color.White)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showFeedbackDialog = false }) {
-                    Text("Cancel", color = Color.Gray)
-                }
-            },
-            containerColor = Color(0xFF1E1E1E)
+        RealFeedbackDialog(
+            context = context,
+            onDismiss = { showFeedbackDialog = false }
         )
     }
 
@@ -527,8 +634,11 @@ fun ProfileScreen(
                     )
                     Spacer(modifier = Modifier.height(12.dp))
                     Text("• 100% Offline & Private (Zero tracking)", color = Color.White, fontSize = 12.sp)
-                    Text("• Native C++ Document Quad Detection", color = Color.White, fontSize = 12.sp)
-                    Text("• Multi-cloud automated background sync", color = Color.White, fontSize = 12.sp)
+                    Text("• Native C++ Document Quad Detection & Warp", color = Color.White, fontSize = 12.sp)
+                    Text("• Multi-cloud & SAF local archive synchronization", color = Color.White, fontSize = 12.sp)
+                    Text("• Multi-script ML Kit OCR (Latin, Devanagari, Chinese, Japanese)", color = Color.White, fontSize = 12.sp)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("Licensed under the MIT License.", color = Color.Gray, fontSize = 11.sp)
                 }
             },
             confirmButton = {
@@ -548,13 +658,14 @@ fun ProfileScreen(
 fun ProfileMenuRow(
     icon: ImageVector,
     title: String,
+    subtitle: String? = null,
     onClick: () -> Unit
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 15.dp),
+            .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(
@@ -564,12 +675,27 @@ fun ProfileMenuRow(
             modifier = Modifier.size(22.dp)
         )
         Spacer(modifier = Modifier.width(16.dp))
-        Text(
-            text = title,
-            color = Color.White,
-            fontSize = 15.sp,
-            fontWeight = FontWeight.Medium,
-            modifier = Modifier.weight(1f)
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                color = Color.White,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Medium
+            )
+            if (subtitle != null) {
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = subtitle,
+                    color = Color.Gray,
+                    fontSize = 12.sp
+                )
+            }
+        }
+        Icon(
+            Icons.Default.ChevronRight,
+            contentDescription = null,
+            tint = Color(0xFF555555),
+            modifier = Modifier.size(18.dp)
         )
     }
 }
@@ -584,29 +710,105 @@ fun ProfileDivider() {
 }
 
 /**
- * Cloud Storage & Auto-Sync Dialog
- * Supports Google Drive, Microsoft OneDrive, Dropbox, WebDAV/Nextcloud, and Local Backup
+ * Real Multi-Cloud Storage & Auto-Sync Dialog with genuine SDK clients.
  */
 @Composable
-fun CloudStorageSyncDialog(
-    prefs: android.content.SharedPreferences,
+fun RealCloudSyncDialog(
+    cloudSyncManager: CloudSyncManager,
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
 
-    var googleDriveConnected by remember { mutableStateOf(prefs.getBoolean("sync_gdrive", true)) }
-    var oneDriveConnected by remember { mutableStateOf(prefs.getBoolean("sync_onedrive", false)) }
-    var dropboxConnected by remember { mutableStateOf(prefs.getBoolean("sync_dropbox", false)) }
-    var webdavConnected by remember { mutableStateOf(prefs.getBoolean("sync_webdav", false)) }
-    var localBackupConnected by remember { mutableStateOf(prefs.getBoolean("sync_local", true)) }
+    var autoSyncEnabled by remember { mutableStateOf(cloudSyncManager.isAutoSyncEnabled()) }
+    var wifiOnly by remember { mutableStateOf(cloudSyncManager.isWifiOnly()) }
+    var syncPdfCopies by remember { mutableStateOf(cloudSyncManager.isSyncPdfCopies()) }
 
-    var autoSyncNewScans by remember { mutableStateOf(prefs.getBoolean("auto_sync_enabled", true)) }
-    var wifiOnly by remember { mutableStateOf(prefs.getBoolean("sync_wifi_only", true)) }
-    var syncPdfCopies by remember { mutableStateOf(prefs.getBoolean("sync_pdf_copies", true)) }
+    var isGdriveConnected by remember { mutableStateOf(false) }
+    var gdriveAccount by remember { mutableStateOf("Not connected") }
 
-    var isSyncingNow by remember { mutableStateOf(false) }
-    var lastSyncStatus by remember { mutableStateOf(prefs.getString("last_sync_time", "Just now") ?: "Just now") }
+    var isDropboxConnected by remember { mutableStateOf(false) }
+    var dropboxAccount by remember { mutableStateOf("Not connected") }
+
+    var isOneDriveConnected by remember { mutableStateOf(false) }
+    var oneDriveAccount by remember { mutableStateOf("Not connected") }
+
+    var isWebDavConnected by remember { mutableStateOf(false) }
+    var webDavAccount by remember { mutableStateOf("Not connected") }
+
+    var isLocalConnected by remember { mutableStateOf(false) }
+    var localFolderName by remember { mutableStateOf("Not selected") }
+
+    // Sub-dialogs for account credentials
+    var showDropboxDialog by remember { mutableStateOf(false) }
+    var showOneDriveDialog by remember { mutableStateOf(false) }
+    var showWebDavDialog by remember { mutableStateOf(false) }
+
+    fun refreshProviderStatuses() {
+        coroutineScope.launch {
+            isGdriveConnected = cloudSyncManager.googleDriveProvider.isConnected()
+            gdriveAccount = if (isGdriveConnected) cloudSyncManager.googleDriveProvider.getAccountIdentifier() else "Not connected"
+
+            isDropboxConnected = cloudSyncManager.dropboxProvider.isConnected()
+            dropboxAccount = if (isDropboxConnected) cloudSyncManager.dropboxProvider.getAccountIdentifier() else "Not connected"
+
+            isOneDriveConnected = cloudSyncManager.oneDriveProvider.isConnected()
+            oneDriveAccount = if (isOneDriveConnected) cloudSyncManager.oneDriveProvider.getAccountIdentifier() else "Not connected"
+
+            isWebDavConnected = cloudSyncManager.webDavProvider.isConnected()
+            webDavAccount = if (isWebDavConnected) cloudSyncManager.webDavProvider.getAccountIdentifier() else "Not connected"
+
+            isLocalConnected = cloudSyncManager.localSafProvider.isConnected()
+            localFolderName = if (isLocalConnected) cloudSyncManager.localSafProvider.getAccountIdentifier() else "Not selected"
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        refreshProviderStatuses()
+    }
+
+    // Google Sign-In Activity Result Launcher
+    val googleSignInLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
+        try {
+            val account = task.getResult(com.google.android.gms.common.api.ApiException::class.java)
+            if (account != null) {
+                coroutineScope.launch {
+                    cloudSyncManager.googleDriveProvider.onAccountSignedIn(account)
+                    refreshProviderStatuses()
+                    Toast.makeText(context, "Google Drive connected: ${account.email}", Toast.LENGTH_SHORT).show()
+                }
+            }
+        } catch (e: Exception) {
+            Toast.makeText(context, "Google Drive sign-in: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // SAF Local Directory Picker Launcher
+    val safFolderLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            try {
+                val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                context.contentResolver.takePersistableUriPermission(uri, flags)
+                val docFile = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, uri)
+                val folderName = docFile?.name ?: "Selected Folder"
+                coroutineScope.launch {
+                    cloudSyncManager.localSafProvider.saveFolderUri(uri, folderName)
+                    refreshProviderStatuses()
+                    Toast.makeText(context, "Backup folder selected: $folderName", Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: Exception) {
+                Toast.makeText(context, "SAF permission error: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    val syncState by cloudSyncManager.syncState.collectAsState()
+    val lastSyncTime by cloudSyncManager.lastSyncTime.collectAsState()
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -614,7 +816,7 @@ fun CloudStorageSyncDialog(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Outlined.Sync, contentDescription = null, tint = ScannerGreen)
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Cloud Storage & Auto-Sync", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                Text("Cloud Storage & Multi-Sync", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
             }
         },
         text = {
@@ -624,79 +826,111 @@ fun CloudStorageSyncDialog(
                     .verticalScroll(rememberScrollState())
             ) {
                 Text(
-                    text = "Connect your cloud accounts for automatic offline backup & instant synchronization.",
+                    text = "Connect genuine cloud accounts & local folders to automatically back up scans and databases.",
                     color = Color.LightGray,
                     fontSize = 12.sp
                 )
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                Text("CLOUD PROVIDERS", color = ScannerGreen, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                Text("GENUINE CLOUD PROVIDERS", color = ScannerGreen, fontSize = 11.sp, fontWeight = FontWeight.Bold)
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // 1. Google Drive
-                CloudProviderItem(
+                // 1. Google Drive (Official Play Services Auth & Drive v3 SDK)
+                RealCloudProviderItem(
                     name = "Google Drive",
-                    accountDesc = if (googleDriveConnected) "krishnanamdev@gmail.com" else "Not connected",
-                    isConnected = googleDriveConnected,
-                    onToggleConnect = {
-                        googleDriveConnected = !googleDriveConnected
-                        prefs.edit().putBoolean("sync_gdrive", googleDriveConnected).apply()
-                        val msg = if (googleDriveConnected) "Google Drive connected for Auto-Sync!" else "Google Drive disconnected"
-                        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                    accountDesc = gdriveAccount,
+                    isConnected = isGdriveConnected,
+                    onConnectClick = {
+                        if (isGdriveConnected) {
+                            coroutineScope.launch {
+                                cloudSyncManager.googleDriveProvider.disconnect()
+                                refreshProviderStatuses()
+                            }
+                        } else {
+                            try {
+                                googleSignInLauncher.launch(cloudSyncManager.googleDriveProvider.getSignInIntent())
+                            } catch (e: Exception) {
+                                Toast.makeText(context, "Failed to launch Google Sign-In: ${e.message}", Toast.LENGTH_SHORT).show()
+                            }
+                        }
                     }
                 )
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // 2. Microsoft OneDrive
-                CloudProviderItem(
+                // 2. Microsoft OneDrive (Microsoft Graph REST Client)
+                RealCloudProviderItem(
                     name = "Microsoft OneDrive",
-                    accountDesc = if (oneDriveConnected) "Connected (OneDrive/OpenScanner)" else "Not connected",
-                    isConnected = oneDriveConnected,
-                    onToggleConnect = {
-                        oneDriveConnected = !oneDriveConnected
-                        prefs.edit().putBoolean("sync_onedrive", oneDriveConnected).apply()
+                    accountDesc = oneDriveAccount,
+                    isConnected = isOneDriveConnected,
+                    onConnectClick = {
+                        if (isOneDriveConnected) {
+                            coroutineScope.launch {
+                                cloudSyncManager.oneDriveProvider.disconnect()
+                                refreshProviderStatuses()
+                            }
+                        } else {
+                            showOneDriveDialog = true
+                        }
                     }
                 )
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // 3. Dropbox
-                CloudProviderItem(
+                // 3. Dropbox (Official Dropbox Core SDK)
+                RealCloudProviderItem(
                     name = "Dropbox",
-                    accountDesc = if (dropboxConnected) "Connected (/Apps/OpenScanner)" else "Not connected",
-                    isConnected = dropboxConnected,
-                    onToggleConnect = {
-                        dropboxConnected = !dropboxConnected
-                        prefs.edit().putBoolean("sync_dropbox", dropboxConnected).apply()
+                    accountDesc = dropboxAccount,
+                    isConnected = isDropboxConnected,
+                    onConnectClick = {
+                        if (isDropboxConnected) {
+                            coroutineScope.launch {
+                                cloudSyncManager.dropboxProvider.disconnect()
+                                refreshProviderStatuses()
+                            }
+                        } else {
+                            showDropboxDialog = true
+                        }
                     }
                 )
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // 4. WebDAV / Nextcloud
-                CloudProviderItem(
+                // 4. WebDAV / Nextcloud Client
+                RealCloudProviderItem(
                     name = "WebDAV / Nextcloud",
-                    accountDesc = if (webdavConnected) "https://cloud.myserver.com/remote.php/dav" else "Custom private server",
-                    isConnected = webdavConnected,
-                    onToggleConnect = {
-                        webdavConnected = !webdavConnected
-                        prefs.edit().putBoolean("sync_webdav", webdavConnected).apply()
+                    accountDesc = webDavAccount,
+                    isConnected = isWebDavConnected,
+                    onConnectClick = {
+                        if (isWebDavConnected) {
+                            coroutineScope.launch {
+                                cloudSyncManager.webDavProvider.disconnect()
+                                refreshProviderStatuses()
+                            }
+                        } else {
+                            showWebDavDialog = true
+                        }
                     }
                 )
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // 5. Local SD Card Backup
-                CloudProviderItem(
+                // 5. Local / SD Card (Storage Access Framework)
+                RealCloudProviderItem(
                     name = "Local / SD Card Backup",
-                    accountDesc = if (localBackupConnected) "Documents/OpenScannerBackup" else "Disabled",
-                    isConnected = localBackupConnected,
-                    onToggleConnect = {
-                        localBackupConnected = !localBackupConnected
-                        prefs.edit().putBoolean("sync_local", localBackupConnected).apply()
+                    accountDesc = localFolderName,
+                    isConnected = isLocalConnected,
+                    onConnectClick = {
+                        if (isLocalConnected) {
+                            coroutineScope.launch {
+                                cloudSyncManager.localSafProvider.disconnect()
+                                refreshProviderStatuses()
+                            }
+                        } else {
+                            safFolderLauncher.launch(null)
+                        }
                     }
                 )
 
@@ -714,13 +948,13 @@ fun CloudStorageSyncDialog(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text("Auto-Sync New Scans", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                        Text("Upload automatically right after scanning", color = Color.Gray, fontSize = 11.sp)
+                        Text("Upload automatically after scanning", color = Color.Gray, fontSize = 11.sp)
                     }
                     Switch(
-                        checked = autoSyncNewScans,
+                        checked = autoSyncEnabled,
                         onCheckedChange = {
-                            autoSyncNewScans = it
-                            prefs.edit().putBoolean("auto_sync_enabled", it).apply()
+                            autoSyncEnabled = it
+                            cloudSyncManager.setAutoSyncEnabled(it)
                         },
                         colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = ScannerGreen)
                     )
@@ -734,13 +968,13 @@ fun CloudStorageSyncDialog(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text("Sync on Wi-Fi Only", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                        Text("Conserve mobile data when uploading HD files", color = Color.Gray, fontSize = 11.sp)
+                        Text("Conserve mobile data when uploading HD scans", color = Color.Gray, fontSize = 11.sp)
                     }
                     Switch(
                         checked = wifiOnly,
                         onCheckedChange = {
                             wifiOnly = it
-                            prefs.edit().putBoolean("sync_wifi_only", it).apply()
+                            cloudSyncManager.setWifiOnly(it)
                         },
                         colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = ScannerGreen)
                     )
@@ -754,13 +988,13 @@ fun CloudStorageSyncDialog(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text("Auto-Generate & Sync PDFs", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                        Text("Sync searchable multi-page PDF alongside images", color = Color.Gray, fontSize = 11.sp)
+                        Text("Sync multi-page PDF & ZIP backup package", color = Color.Gray, fontSize = 11.sp)
                     }
                     Switch(
                         checked = syncPdfCopies,
                         onCheckedChange = {
                             syncPdfCopies = it
-                            prefs.edit().putBoolean("sync_pdf_copies", it).apply()
+                            cloudSyncManager.setSyncPdfCopies(it)
                         },
                         colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = ScannerGreen)
                     )
@@ -779,29 +1013,45 @@ fun CloudStorageSyncDialog(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Column {
+                        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
                             Text("Sync Status", color = Color.Gray, fontSize = 11.sp)
-                            Text("Last synced: $lastSyncStatus", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                            val statusText = when (val s = syncState) {
+                                is SyncState.Syncing -> s.progressMessage
+                                is SyncState.Completed -> s.message
+                                is SyncState.Failed -> s.error
+                                else -> "Last synced: $lastSyncTime"
+                            }
+                            Text(
+                                text = statusText,
+                                color = Color.White,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 2
+                            )
                         }
-                        if (isSyncingNow) {
-                            CircularProgressIndicator(color = ScannerGreen, modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+
+                        if (syncState is SyncState.Syncing) {
+                            CircularProgressIndicator(
+                                color = ScannerGreen,
+                                modifier = Modifier.size(24.dp),
+                                strokeWidth = 2.dp
+                            )
                         } else {
-                            OutlinedButton(
+                            Button(
                                 onClick = {
-                                    isSyncingNow = true
                                     coroutineScope.launch {
-                                        delay(1200)
-                                        isSyncingNow = false
-                                        lastSyncStatus = "Just now"
-                                        prefs.edit().putString("last_sync_time", "Just now").apply()
-                                        Toast.makeText(context, "All scans synced to Google Drive & Local Backup!", Toast.LENGTH_SHORT).show()
+                                        val res = cloudSyncManager.syncNow()
+                                        when (res) {
+                                            is SyncResult.Success -> Toast.makeText(context, res.message, Toast.LENGTH_LONG).show()
+                                            is SyncResult.Error -> Toast.makeText(context, res.message, Toast.LENGTH_LONG).show()
+                                        }
                                     }
                                 },
-                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                                border = BorderStroke(1.dp, ScannerGreen),
+                                colors = ButtonDefaults.buttonColors(containerColor = ScannerGreen),
+                                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
                                 shape = RoundedCornerShape(14.dp)
                             ) {
-                                Text("Sync Now", color = ScannerGreen, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                Text("Sync Now", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                             }
                         }
                     }
@@ -818,14 +1068,250 @@ fun CloudStorageSyncDialog(
         },
         containerColor = Color(0xFF1E1E1E)
     )
+
+    // Sub-Dialog: Dropbox Access Token
+    if (showDropboxDialog) {
+        var tokenInput by remember { mutableStateOf("") }
+        var emailInput by remember { mutableStateOf("") }
+
+        AlertDialog(
+            onDismissRequest = { showDropboxDialog = false },
+            title = { Text("Connect Dropbox", color = Color.White, fontWeight = FontWeight.Bold) },
+            text = {
+                Column {
+                    Text("Enter your Dropbox OAuth Access Token:", color = Color.LightGray, fontSize = 12.sp)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = tokenInput,
+                        onValueChange = { tokenInput = it },
+                        label = { Text("Access Token") },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color.White,
+                            focusedBorderColor = ScannerGreen
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = emailInput,
+                        onValueChange = { emailInput = it },
+                        label = { Text("Account Name / Email (optional)") },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color.White,
+                            focusedBorderColor = ScannerGreen
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (tokenInput.isNotBlank()) {
+                            coroutineScope.launch {
+                                cloudSyncManager.dropboxProvider.saveAccessToken(
+                                    token = tokenInput,
+                                    accountName = emailInput.ifBlank { "Dropbox User" }
+                                )
+                                refreshProviderStatuses()
+                                showDropboxDialog = false
+                            }
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = ScannerGreen)
+                ) {
+                    Text("Connect", color = Color.White)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDropboxDialog = false }) {
+                    Text("Cancel", color = Color.Gray)
+                }
+            },
+            containerColor = Color(0xFF1E1E1E)
+        )
+    }
+
+    // Sub-Dialog: OneDrive Token
+    if (showOneDriveDialog) {
+        var tokenInput by remember { mutableStateOf("") }
+        var accountInput by remember { mutableStateOf("") }
+
+        AlertDialog(
+            onDismissRequest = { showOneDriveDialog = false },
+            title = { Text("Connect Microsoft OneDrive", color = Color.White, fontWeight = FontWeight.Bold) },
+            text = {
+                Column {
+                    Text("Enter Microsoft Graph OAuth Token / App Token:", color = Color.LightGray, fontSize = 12.sp)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = tokenInput,
+                        onValueChange = { tokenInput = it },
+                        label = { Text("OAuth Bearer Token") },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color.White,
+                            focusedBorderColor = ScannerGreen
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = accountInput,
+                        onValueChange = { accountInput = it },
+                        label = { Text("Account Name (optional)") },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color.White,
+                            focusedBorderColor = ScannerGreen
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (tokenInput.isNotBlank()) {
+                            coroutineScope.launch {
+                                cloudSyncManager.oneDriveProvider.saveAuth(tokenInput, accountInput)
+                                refreshProviderStatuses()
+                                showOneDriveDialog = false
+                            }
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = ScannerGreen)
+                ) {
+                    Text("Connect", color = Color.White)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showOneDriveDialog = false }) {
+                    Text("Cancel", color = Color.Gray)
+                }
+            },
+            containerColor = Color(0xFF1E1E1E)
+        )
+    }
+
+    // Sub-Dialog: WebDAV / Nextcloud Configuration
+    if (showWebDavDialog) {
+        var urlInput by remember { mutableStateOf("https://cloud.example.com/remote.php/dav/files/user/") }
+        var userInput by remember { mutableStateOf("") }
+        var passInput by remember { mutableStateOf("") }
+        var testResultMsg by remember { mutableStateOf<String?>(null) }
+        var isTesting by remember { mutableStateOf(false) }
+
+        AlertDialog(
+            onDismissRequest = { showWebDavDialog = false },
+            title = { Text("WebDAV / Nextcloud Setup", color = Color.White, fontWeight = FontWeight.Bold) },
+            text = {
+                Column {
+                    Text("Enter your private cloud WebDAV endpoint credentials:", color = Color.LightGray, fontSize = 12.sp)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = urlInput,
+                        onValueChange = { urlInput = it },
+                        label = { Text("Server WebDAV URL") },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color.White,
+                            focusedBorderColor = ScannerGreen
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = userInput,
+                        onValueChange = { userInput = it },
+                        label = { Text("Username") },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color.White,
+                            focusedBorderColor = ScannerGreen
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = passInput,
+                        onValueChange = { passInput = it },
+                        label = { Text("Password or App Token") },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color.White,
+                            focusedBorderColor = ScannerGreen
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                isTesting = true
+                                testResultMsg = null
+                                coroutineScope.launch {
+                                    val res = cloudSyncManager.webDavProvider.testConnection(urlInput, userInput, passInput)
+                                    isTesting = false
+                                    testResultMsg = if (res.isSuccess) "Success!" else "Failed: ${res.exceptionOrNull()?.localizedMessage}"
+                                }
+                            },
+                            enabled = !isTesting && urlInput.isNotBlank() && userInput.isNotBlank()
+                        ) {
+                            Text(if (isTesting) "Testing..." else "Test Connection", fontSize = 12.sp)
+                        }
+
+                        testResultMsg?.let { msg ->
+                            Text(
+                                text = msg,
+                                color = if (msg.startsWith("Success")) ScannerGreen else Color(0xFFFF5252),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (urlInput.isNotBlank() && userInput.isNotBlank()) {
+                            coroutineScope.launch {
+                                cloudSyncManager.webDavProvider.saveCredentials(urlInput, userInput, passInput)
+                                refreshProviderStatuses()
+                                showWebDavDialog = false
+                            }
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = ScannerGreen)
+                ) {
+                    Text("Save & Connect", color = Color.White)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showWebDavDialog = false }) {
+                    Text("Cancel", color = Color.Gray)
+                }
+            },
+            containerColor = Color(0xFF1E1E1E)
+        )
+    }
 }
 
 @Composable
-fun CloudProviderItem(
+fun RealCloudProviderItem(
     name: String,
     accountDesc: String,
     isConnected: Boolean,
-    onToggleConnect: () -> Unit
+    onConnectClick: () -> Unit
 ) {
     Surface(
         shape = RoundedCornerShape(8.dp),
@@ -840,10 +1326,15 @@ fun CloudProviderItem(
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(text = name, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                Text(text = accountDesc, color = if (isConnected) ScannerGreen else Color.Gray, fontSize = 11.sp)
+                Text(
+                    text = accountDesc,
+                    color = if (isConnected) ScannerGreen else Color.Gray,
+                    fontSize = 11.sp,
+                    maxLines = 1
+                )
             }
             Button(
-                onClick = onToggleConnect,
+                onClick = onConnectClick,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = if (isConnected) Color(0xFF263228) else ScannerGreen
                 ),
@@ -862,14 +1353,17 @@ fun CloudProviderItem(
     }
 }
 
+/**
+ * Real Scan Settings Dialog wired to SettingsManager.
+ */
 @Composable
-fun ScanSettingsDialog(
-    prefs: android.content.SharedPreferences,
+fun RealScanSettingsDialog(
+    settingsManager: SettingsManager,
     onDismiss: () -> Unit
 ) {
-    var autoCrop by remember { mutableStateOf(prefs.getBoolean("pref_auto_crop", true)) }
-    var gridEnabled by remember { mutableStateOf(prefs.getBoolean("pref_grid", false)) }
-    var shutterSound by remember { mutableStateOf(prefs.getBoolean("pref_sound", true)) }
+    val autoCrop by settingsManager.autoCropEnabled.collectAsState()
+    val gridEnabled by settingsManager.gridEnabled.collectAsState()
+    val shutterSound by settingsManager.shutterSoundEnabled.collectAsState()
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -881,43 +1375,49 @@ fun ScanSettingsDialog(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Auto-Crop Bounds by Default", color = Color.White, fontSize = 14.sp)
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Auto-Crop Bounds by Default", color = Color.White, fontSize = 14.sp)
+                        Text("Detect edges and perspective warp automatically", color = Color.Gray, fontSize = 11.sp)
+                    }
                     Switch(
                         checked = autoCrop,
-                        onCheckedChange = {
-                            autoCrop = it
-                            prefs.edit().putBoolean("pref_auto_crop", it).apply()
-                        },
+                        onCheckedChange = { settingsManager.setAutoCropEnabled(it) },
                         colors = SwitchDefaults.colors(checkedTrackColor = ScannerGreen)
                     )
                 }
+
+                HorizontalDivider(color = Color(0xFF2C2C2C), thickness = 0.5.dp, modifier = Modifier.padding(vertical = 4.dp))
+
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Viewfinder Rule-of-Thirds Grid", color = Color.White, fontSize = 14.sp)
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Viewfinder Rule-of-Thirds Grid", color = Color.White, fontSize = 14.sp)
+                        Text("Show 3x3 alignment guidelines in camera", color = Color.Gray, fontSize = 11.sp)
+                    }
                     Switch(
                         checked = gridEnabled,
-                        onCheckedChange = {
-                            gridEnabled = it
-                            prefs.edit().putBoolean("pref_grid", it).apply()
-                        },
+                        onCheckedChange = { settingsManager.setGridEnabled(it) },
                         colors = SwitchDefaults.colors(checkedTrackColor = ScannerGreen)
                     )
                 }
+
+                HorizontalDivider(color = Color(0xFF2C2C2C), thickness = 0.5.dp, modifier = Modifier.padding(vertical = 4.dp))
+
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Camera Shutter Sound", color = Color.White, fontSize = 14.sp)
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Camera Shutter Sound", color = Color.White, fontSize = 14.sp)
+                        Text("Play physical camera shutter audio click", color = Color.Gray, fontSize = 11.sp)
+                    }
                     Switch(
                         checked = shutterSound,
-                        onCheckedChange = {
-                            shutterSound = it
-                            prefs.edit().putBoolean("pref_sound", it).apply()
-                        },
+                        onCheckedChange = { settingsManager.setShutterSoundEnabled(it) },
                         colors = SwitchDefaults.colors(checkedTrackColor = ScannerGreen)
                     )
                 }
@@ -932,47 +1432,91 @@ fun ScanSettingsDialog(
     )
 }
 
+/**
+ * Real Document Management Dialog wired to SettingsManager with naming patterns & auto-OCR.
+ */
 @Composable
-fun DocManagementDialog(
-    prefs: android.content.SharedPreferences,
+fun RealDocManagementDialog(
+    settingsManager: SettingsManager,
     onDismiss: () -> Unit
 ) {
-    var namingTemplate by remember { mutableStateOf(prefs.getString("pref_naming", "OpenScanner_yyyyMMdd_HHmmss") ?: "OpenScanner_yyyyMMdd_HHmmss") }
-    var autoOcr by remember { mutableStateOf(prefs.getBoolean("pref_auto_ocr", true)) }
+    val namingPattern by settingsManager.namingPattern.collectAsState()
+    val autoOcr by settingsManager.autoOcrEnabled.collectAsState()
+    var tempPattern by remember { mutableStateOf(namingPattern) }
+
+    val presetPatterns = listOf(
+        "OpenScanner_yyyyMMdd_HHmmss",
+        "Scan_{DATE}_{TIME}",
+        "Doc_{DATE}",
+        "Receipt_{DATE}"
+    )
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Document Management", color = Color.White, fontWeight = FontWeight.Bold) },
         text = {
             Column {
-                Text("Default Naming Pattern:", color = Color.Gray, fontSize = 12.sp)
+                Text("Default Document Naming Pattern:", color = Color.Gray, fontSize = 12.sp)
                 Spacer(modifier = Modifier.height(4.dp))
                 OutlinedTextField(
-                    value = namingTemplate,
+                    value = tempPattern,
                     onValueChange = {
-                        namingTemplate = it
-                        prefs.edit().putString("pref_naming", it).apply()
+                        tempPattern = it
+                        settingsManager.setNamingPattern(it)
                     },
                     singleLine = true,
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedTextColor = Color.White,
                         unfocusedTextColor = Color.White,
                         focusedBorderColor = ScannerGreen
-                    )
+                    ),
+                    modifier = Modifier.fillMaxWidth()
                 )
-                Spacer(modifier = Modifier.height(14.dp))
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                // Pattern helper chips
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    presetPatterns.take(2).forEach { pat ->
+                        SuggestionChip(
+                            onClick = {
+                                tempPattern = pat
+                                settingsManager.setNamingPattern(pat)
+                            },
+                            label = { Text(pat, fontSize = 10.sp) }
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                // Live preview of generated title
+                Text(
+                    text = "Preview: ${settingsManager.generateDocumentTitle()}",
+                    color = ScannerGreen,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+                HorizontalDivider(color = Color(0xFF2C2C2C), thickness = 0.5.dp)
+                Spacer(modifier = Modifier.height(8.dp))
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Auto-Run OCR After Scan", color = Color.White, fontSize = 14.sp)
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Auto-Run OCR After Scan", color = Color.White, fontSize = 14.sp)
+                        Text("Extract text automatically in background", color = Color.Gray, fontSize = 11.sp)
+                    }
                     Switch(
                         checked = autoOcr,
-                        onCheckedChange = {
-                            autoOcr = it
-                            prefs.edit().putBoolean("pref_auto_ocr", it).apply()
-                        },
+                        onCheckedChange = { settingsManager.setAutoOcrEnabled(it) },
                         colors = SwitchDefaults.colors(checkedTrackColor = ScannerGreen)
                     )
                 }
@@ -987,12 +1531,15 @@ fun DocManagementDialog(
     )
 }
 
+/**
+ * Real Document Export Dialog wired to SettingsManager.
+ */
 @Composable
-fun DocExportDialog(
-    prefs: android.content.SharedPreferences,
+fun RealDocExportDialog(
+    settingsManager: SettingsManager,
     onDismiss: () -> Unit
 ) {
-    var defaultPageSize by remember { mutableStateOf(prefs.getString("pref_pdf_size", "A4") ?: "A4") }
+    val currentSize by settingsManager.defaultPdfSize.collectAsState()
     val options = listOf("A4", "US Letter", "Fit to Document")
 
     AlertDialog(
@@ -1007,18 +1554,12 @@ fun DocExportDialog(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable {
-                                defaultPageSize = opt
-                                prefs.edit().putString("pref_pdf_size", opt).apply()
-                            }
+                            .clickable { settingsManager.setDefaultPdfSize(opt) }
                             .padding(vertical = 6.dp)
                     ) {
                         RadioButton(
-                            selected = defaultPageSize == opt,
-                            onClick = {
-                                defaultPageSize = opt
-                                prefs.edit().putString("pref_pdf_size", opt).apply()
-                            },
+                            selected = currentSize == opt,
+                            onClick = { settingsManager.setDefaultPdfSize(opt) },
                             colors = RadioButtonDefaults.colors(selectedColor = ScannerGreen)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
@@ -1036,17 +1577,25 @@ fun DocExportDialog(
     )
 }
 
+/**
+ * Real OCR Language Dialog supporting Multi-Script ML Kit (Latin, Devanagari, Chinese, Japanese).
+ */
 @Composable
-fun OcrLanguageDialog(
-    prefs: android.content.SharedPreferences,
+fun RealOcrLanguageDialog(
+    settingsManager: SettingsManager,
     onDismiss: () -> Unit
 ) {
-    var selectedLang by remember { mutableStateOf(prefs.getString("pref_ocr_lang", "English") ?: "English") }
+    val selectedLang by settingsManager.ocrLanguage.collectAsState()
     val languages = listOf("English", "Hindi", "Spanish", "French", "German", "Japanese", "Chinese")
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("OCR Language Selection", color = Color.White, fontWeight = FontWeight.Bold) },
+        title = {
+            Column {
+                Text("OCR Language Selection", color = Color.White, fontWeight = FontWeight.Bold)
+                Text("Powered by Google ML Kit Offline Models", color = ScannerGreen, fontSize = 11.sp)
+            }
+        },
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                 languages.forEach { lang ->
@@ -1054,18 +1603,12 @@ fun OcrLanguageDialog(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable {
-                                selectedLang = lang
-                                prefs.edit().putString("pref_ocr_lang", lang).apply()
-                            }
+                            .clickable { settingsManager.setOcrLanguage(lang) }
                             .padding(vertical = 6.dp)
                     ) {
                         RadioButton(
-                            selected = selectedLang == lang,
-                            onClick = {
-                                selectedLang = lang
-                                prefs.edit().putString("pref_ocr_lang", lang).apply()
-                            },
+                            selected = selectedLang.equals(lang, ignoreCase = true),
+                            onClick = { settingsManager.setOcrLanguage(lang) },
                             colors = RadioButtonDefaults.colors(selectedColor = ScannerGreen)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
@@ -1077,6 +1620,101 @@ fun OcrLanguageDialog(
         confirmButton = {
             Button(onClick = onDismiss, colors = ButtonDefaults.buttonColors(containerColor = ScannerGreen)) {
                 Text("Done", color = Color.White)
+            }
+        },
+        containerColor = Color(0xFF1E1E1E)
+    )
+}
+
+/**
+ * Real Feedback Dialog opening genuine GitHub Issues on krinry/openscanner with system diagnostic metadata.
+ */
+@Composable
+fun RealFeedbackDialog(
+    context: Context,
+    onDismiss: () -> Unit
+) {
+    var feedbackText by remember { mutableStateOf("") }
+    var issueTitle by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Submit Feedback & Issue", color = Color.White, fontWeight = FontWeight.Bold) },
+        text = {
+            Column {
+                Text(
+                    "Submit directly to OpenScanner GitHub Issues (krinry/openscanner) with auto-attached system details:",
+                    color = Color.LightGray,
+                    fontSize = 12.sp
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = issueTitle,
+                    onValueChange = { issueTitle = it },
+                    label = { Text("Issue Title / Summary") },
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White,
+                        focusedBorderColor = ScannerGreen,
+                        unfocusedBorderColor = Color.Gray
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = feedbackText,
+                    onValueChange = { feedbackText = it },
+                    placeholder = { Text("Describe the bug or feature request in detail...") },
+                    modifier = Modifier.fillMaxWidth().height(120.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White,
+                        focusedBorderColor = ScannerGreen,
+                        unfocusedBorderColor = Color.Gray
+                    )
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val title = Uri.encode(issueTitle.ifBlank { "User Feedback: OpenScanner" })
+                    val bodyContent = buildString {
+                        appendLine("### Description")
+                        appendLine(feedbackText.ifBlank { "General feedback." })
+                        appendLine()
+                        appendLine("### Environment Details")
+                        appendLine("- App: OpenScanner v1.0.0")
+                        appendLine("- Android Version: ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
+                        appendLine("- Device: ${Build.MANUFACTURER} ${Build.MODEL}")
+                        appendLine("- Device Brand: ${Build.BRAND}")
+                    }
+                    val body = Uri.encode(bodyContent)
+                    val githubUrl = "https://github.com/krinry/openscanner/issues/new?title=$title&body=$body"
+
+                    try {
+                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(githubUrl))
+                        context.startActivity(intent)
+                    } catch (e: Exception) {
+                        // Fallback to mailto
+                        val emailIntent = Intent(Intent.ACTION_SENDTO).apply {
+                            data = Uri.parse("mailto:support@openscanner.org")
+                            putExtra(Intent.EXTRA_SUBJECT, issueTitle)
+                            putExtra(Intent.EXTRA_TEXT, bodyContent)
+                        }
+                        context.startActivity(emailIntent)
+                    }
+                    onDismiss()
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = ScannerGreen)
+            ) {
+                Text("Submit on GitHub", color = Color.White)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel", color = Color.Gray)
             }
         },
         containerColor = Color(0xFF1E1E1E)

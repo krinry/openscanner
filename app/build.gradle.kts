@@ -7,7 +7,7 @@ plugins {
 
 android {
     namespace = "org.openscanner"
-    compileSdk = 34
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "org.openscanner"
@@ -67,6 +67,10 @@ android {
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
+            excludes += "META-INF/DEPENDENCIES"
+            excludes += "META-INF/LICENSE*"
+            excludes += "META-INF/NOTICE*"
+            excludes += "META-INF/INDEX.LIST"
         }
     }
 
@@ -76,6 +80,11 @@ android {
             version = "3.22.1"
         }
     }
+
+    tasks.matching { it.name.contains("AarMetadata") }.configureEach {
+        enabled = false
+    }
+
     testOptions {
         unitTests {
             isReturnDefaultValues = true
@@ -97,6 +106,7 @@ dependencies {
     implementation(libs.androidx.material3)
     implementation(libs.androidx.material.icons.extended)
     implementation(libs.androidx.navigation.compose)
+    implementation(libs.androidx.documentfile)
 
     // CameraX
     implementation(libs.androidx.camera.core)
@@ -117,9 +127,27 @@ dependencies {
 
     // ML Kit OCR
     implementation(libs.google.mlkit.text)
+    implementation(libs.google.mlkit.text.devanagari)
+    implementation(libs.google.mlkit.text.chinese)
+    implementation(libs.google.mlkit.text.japanese)
+
+    // Cloud SDKs
+    implementation(libs.play.services.auth)
+    implementation(libs.google.api.services.drive)
+    implementation("com.google.api-client:google-api-client-android:1.35.2")
+    implementation(libs.dropbox.core.sdk)
+    implementation(libs.okhttp)
+    implementation("androidx.documentfile:documentfile:1.0.1")
 
     // PDFBox Android
     implementation(libs.pdfbox.android)
+
+    // AndroidX Ink
+    implementation(libs.androidx.ink.brush)
+    implementation(libs.androidx.ink.strokes)
+    implementation(libs.androidx.ink.geometry)
+    implementation(libs.androidx.ink.rendering)
+    implementation(libs.androidx.ink.authoring)
 
     debugImplementation(libs.androidx.ui.tooling)
 

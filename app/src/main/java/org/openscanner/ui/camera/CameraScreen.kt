@@ -65,6 +65,7 @@ import org.openscanner.cv.IdCardCropper
 import org.openscanner.cv.OcrEngine
 import org.openscanner.data.model.EnhanceMode
 import org.openscanner.data.repository.ScannerRepository
+import org.openscanner.data.repository.SettingsManager
 import org.openscanner.ui.crop.CropScreen
 import org.openscanner.ui.theme.ScannerGreen
 import java.io.File
@@ -215,7 +216,8 @@ fun CameraScreen(
     var camera by remember { mutableStateOf<Camera?>(null) }
     var imageCapture: ImageCapture? by remember { mutableStateOf(null) }
 
-    var showGrid by remember { mutableStateOf(false) }
+    val settingsManager = remember { SettingsManager.getInstance(context) }
+    var showGrid by remember { mutableStateOf(settingsManager.gridEnabled.value) }
     var showSideSheet by remember { mutableStateOf(false) }
     var showFilterSlider by remember { mutableStateOf(false) }
     var showDraftDialog by remember { mutableStateOf(false) }
@@ -507,7 +509,11 @@ fun CameraScreen(
             }
 
             // 4. Grid Toggle
-            IconButton(onClick = { showGrid = !showGrid }) {
+            IconButton(onClick = {
+                val next = !showGrid
+                showGrid = next
+                settingsManager.setGridEnabled(next)
+            }) {
                 Icon(
                     if (showGrid) Icons.Filled.GridOn else Icons.Outlined.GridOff,
                     contentDescription = "Grid",
