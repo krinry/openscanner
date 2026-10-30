@@ -22,10 +22,13 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.DriveFileMove
+import androidx.compose.material.icons.automirrored.outlined.RotateRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.outlined.*
@@ -36,6 +39,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.asImageBitmap
@@ -47,6 +51,9 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -63,6 +70,8 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.zIndex
 import coil.compose.AsyncImage
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.openscanner.cv.CollageGenerator
@@ -142,10 +151,206 @@ class CollageSheetState(
     val slotCroppedPaths: SnapshotStateMap<Int, String> = mutableStateMapOf()
 )
 
+/**
+ * Isolated snapping guides state for canvas draw-phase rendering without recompositions.
+ */
+class SnapGuidesState {
+    var snapVertical by mutableStateOf(false)
+    var snapHorizontal by mutableStateOf(false)
+}
+
+/**
+ * Multi-page drag and drop coordinator allowing images to be moved or swapped across pages.
+ */
+class CrossPageDragController {
+    var isDragging by mutableStateOf(false)
+    var sourceSheetIndex by mutableIntStateOf(-1)
+    var sourceSlotIndex by mutableIntStateOf(-1)
+    var draggedPage by mutableStateOf<Page?>(null)
+    var draggedCustomPath by mutableStateOf<String?>(null)
+    var draggedBitmap by mutableStateOf<Bitmap?>(null)
+    var dragItemSize by mutableStateOf(IntSize.Zero)
+
+    var currentRootPos by mutableStateOf(Offset.Zero)
+    var startRootPos by mutableStateOf(Offset.Zero)
+
+    var hoverSheetIndex by mutableStateOf<Int?>(null)
+    var hoverSlotIndex by mutableStateOf<Int?>(null)
+
+    val sheetBoundsInRoot = mutableMapOf<Int, Rect>()
+
+    fun startDrag(
+        sheetIndex: Int,
+        slotIndex: Int,
+        page: Page?,
+        customPath: String?,
+        bitmap: Bitmap?,
+        itemSize: IntSize,
+        rootPos: Offset
+    ) {
+        sourceSheetIndex = sheetIndex
+        sourceSlotIndex = slotIndex
+        draggedPage = page
+        draggedCustomPath = customPath
+        draggedBitmap = bitmap
+        dragItemSize = itemSize
+        startRootPos = rootPos
+        currentRootPos = rootPos
+        isDragging = true
+        hoverSheetIndex = sheetIndex
+        hoverSlotIndex = slotIndex
+    }
+
+    fun updateDragPosition(pos: Offset, layout: CollageLayout) {
+        currentRootPos = pos
+        var foundSheet: Int? = null
+        var foundSlot: Int? = null
+
+        // 1. Direct hit test within sheet bounds
+        for ((sIdx, rect) in sheetBoundsInRoot) {
+            if (rect.contains(pos)) {
+                foundSheet = sIdx
+                val localX = pos.x - rect.left
+                val localY = pos.y - rect.top
+                val slots = CollageGenerator.calculateSlotRects(layout, rect.width.toInt(), rect.height.toInt())
+                for (i in slots.indices) {
+                    val r = slots[i]
+                    if (localX >= r.left && localX <= r.right && localY >= r.top && localY <= r.bottom) {
+                        foundSlot = i
+                        break
+                    }
+                }
+                if (foundSlot == null && slots.isNotEmpty()) {
+                    foundSlot = slots.indices.minByOrNull { i ->
+                        val r = slots[i]
+                        val cx = (r.left + r.right) / 2f
+                        val cy = (r.top + r.bottom) / 2f
+                        kotlin.math.hypot(localX - cx, localY - cy)
+                    }
+                }
+                break
+            }
+        }
+
+        // 2. Tolerance for vertical gaps between sheets
+        if (foundSheet == null && sheetBoundsInRoot.isNotEmpty()) {
+            val closestSheet = sheetBoundsInRoot.minByOrNull { (_, rect) ->
+                val dy = when {
+                    pos.y < rect.top -> rect.top - pos.y
+                    pos.y > rect.bottom -> pos.y - rect.bottom
+                    else -> 0f
+                }
+                val dx = when {
+                    pos.x < rect.left -> rect.left - pos.x
+                    pos.x > rect.right -> pos.x - rect.right
+                    else -> 0f
+                }
+                kotlin.math.hypot(dx, dy)
+            }
+            if (closestSheet != null) {
+                val rect = closestSheet.value
+                val distY = when {
+                    pos.y < rect.top -> rect.top - pos.y
+                    pos.y > rect.bottom -> pos.y - rect.bottom
+                    else -> 0f
+                }
+                if (distY < 80f) {
+                    foundSheet = closestSheet.key
+                    val localX = (pos.x - rect.left).coerceIn(0f, rect.width)
+                    val localY = (pos.y - rect.top).coerceIn(0f, rect.height)
+                    val slots = CollageGenerator.calculateSlotRects(layout, rect.width.toInt(), rect.height.toInt())
+                    foundSlot = slots.indices.minByOrNull { i ->
+                        val r = slots[i]
+                        val cx = (r.left + r.right) / 2f
+                        val cy = (r.top + r.bottom) / 2f
+                        kotlin.math.hypot(localX - cx, localY - cy)
+                    }
+                }
+            }
+        }
+
+        hoverSheetIndex = foundSheet
+        hoverSlotIndex = foundSlot
+    }
+
+    fun commitDrop(
+        sheets: MutableList<CollageSheetState>,
+        onSelect: (sheetIdx: Int, slotIdx: Int) -> Unit,
+        showToast: (String) -> Unit
+    ) {
+        if (!isDragging) return
+        val srcSheetIdx = sourceSheetIndex
+        val srcSlotIdx = sourceSlotIndex
+        val tgtSheetIdx = hoverSheetIndex
+        val tgtSlotIdx = hoverSlotIndex
+
+        if (tgtSheetIdx != null && tgtSlotIdx != null && (tgtSheetIdx != srcSheetIdx || tgtSlotIdx != srcSlotIdx)) {
+            val srcSheet = sheets.getOrNull(srcSheetIdx)
+            val tgtSheet = sheets.getOrNull(tgtSheetIdx)
+
+            if (srcSheet != null && tgtSheet != null) {
+                val srcPage = srcSheet.slotAssignments[srcSlotIdx]
+                val srcCrop = srcSheet.slotCroppedPaths[srcSlotIdx]
+                val tgtPage = tgtSheet.slotAssignments[tgtSlotIdx]
+                val tgtCrop = tgtSheet.slotCroppedPaths[tgtSlotIdx]
+
+                // Assign src to target
+                if (srcPage != null) {
+                    tgtSheet.slotAssignments[tgtSlotIdx] = srcPage
+                } else {
+                    tgtSheet.slotAssignments.remove(tgtSlotIdx)
+                }
+                if (srcCrop != null) {
+                    tgtSheet.slotCroppedPaths[tgtSlotIdx] = srcCrop
+                } else {
+                    tgtSheet.slotCroppedPaths.remove(tgtSlotIdx)
+                }
+                tgtSheet.slotTransforms[tgtSlotIdx] = SlotTransform()
+
+                // Assign target to src (swap) or clear
+                if (tgtPage != null || tgtCrop != null) {
+                    if (tgtPage != null) {
+                        srcSheet.slotAssignments[srcSlotIdx] = tgtPage
+                    } else {
+                        srcSheet.slotAssignments.remove(srcSlotIdx)
+                    }
+                    if (tgtCrop != null) {
+                        srcSheet.slotCroppedPaths[srcSlotIdx] = tgtCrop
+                    } else {
+                        srcSheet.slotCroppedPaths.remove(srcSlotIdx)
+                    }
+                    srcSheet.slotTransforms[srcSlotIdx] = SlotTransform()
+                    showToast("Swapped with Page ${tgtSheetIdx + 1}, Slot ${tgtSlotIdx + 1}")
+                } else {
+                    srcSheet.slotAssignments.remove(srcSlotIdx)
+                    srcSheet.slotCroppedPaths.remove(srcSlotIdx)
+                    srcSheet.slotTransforms.remove(srcSlotIdx)
+                    showToast("Moved to Page ${tgtSheetIdx + 1}, Slot ${tgtSlotIdx + 1}")
+                }
+
+                onSelect(tgtSheetIdx, tgtSlotIdx)
+            }
+        }
+        cancelDrag()
+    }
+
+    fun cancelDrag() {
+        isDragging = false
+        sourceSheetIndex = -1
+        sourceSlotIndex = -1
+        draggedPage = null
+        draggedCustomPath = null
+        draggedBitmap = null
+        hoverSheetIndex = null
+        hoverSlotIndex = null
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CollageStudioDialog(
     pages: List<Page>,
+    documentTitle: String = "scan",
     onDismiss: () -> Unit,
     onGenerateCollage: ((
         layout: CollageLayout,
@@ -266,12 +471,22 @@ fun CollageStudioDialog(
                                 )
                             }
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = "Collage",
-                                color = Color.White,
-                                fontSize = 19.sp,
-                                fontWeight = FontWeight.Bold
-                            )
+                            Column {
+                                Text(
+                                    text = "Collage",
+                                    color = Color.White,
+                                    fontSize = 17.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                if (documentTitle.isNotBlank()) {
+                                    Text(
+                                        text = documentTitle,
+                                        color = Color.Gray,
+                                        fontSize = 11.sp,
+                                        maxLines = 1
+                                    )
+                                }
+                            }
                         }
 
                         Button(
@@ -525,18 +740,38 @@ fun CollageStudioDialog(
                 }
             ) { padding ->
                 // Vertically scrollable multi-page canvas area
+                val dragController = remember { CrossPageDragController() }
+                var canvasBoxSize by remember { mutableStateOf(IntSize.Zero) }
+
+                LaunchedEffect(dragController.isDragging) {
+                    if (dragController.isDragging) {
+                        while (isActive && dragController.isDragging) {
+                            if (canvasBoxSize.height > 0) {
+                                val rootY = dragController.currentRootPos.y
+                                val edgeThreshold = 140f
+                                if (rootY > canvasBoxSize.height - edgeThreshold) {
+                                    val intensity = ((rootY - (canvasBoxSize.height - edgeThreshold)) / edgeThreshold).coerceIn(0.1f, 1.0f)
+                                    listState.scrollBy(24f * intensity)
+                                } else if (rootY < edgeThreshold && (listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 0)) {
+                                    val intensity = ((edgeThreshold - rootY) / edgeThreshold).coerceIn(0.1f, 1.0f)
+                                    listState.scrollBy(-24f * intensity)
+                                }
+                            }
+                            delay(16)
+                        }
+                    }
+                }
+
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(padding)
                         .background(Color(0xFF0D0D0D))
+                        .onSizeChanged { canvasBoxSize = it }
                 ) {
-                    // Disable LazyColumn scrolling when an item is selected so it never steals touch gestures!
-                    val isInteractingWithItem = selectedSlotIndex != null
-
                     LazyColumn(
                         state = listState,
-                        userScrollEnabled = !isInteractingWithItem,
+                        userScrollEnabled = !dragController.isDragging,
                         modifier = Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(top = 16.dp, bottom = 120.dp, start = 16.dp, end = 16.dp),
                         verticalArrangement = Arrangement.spacedBy(28.dp),
@@ -552,6 +787,19 @@ fun CollageStudioDialog(
                                 isSheetSelected = selectedSheetIndex == sheetIdx,
                                 selectedSlotIndex = if (selectedSheetIndex == sheetIdx) selectedSlotIndex else null,
                                 watermarkConfig = watermarkConfig,
+                                dragController = dragController,
+                                onCommitCrossDrop = {
+                                    dragController.commitDrop(
+                                        sheets = sheets,
+                                        onSelect = { sIdx, slotIdx ->
+                                            selectedSheetIndex = sIdx
+                                            selectedSlotIndex = slotIdx
+                                        },
+                                        showToast = { msg ->
+                                            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                        }
+                                    )
+                                },
                                 onSelectSlot = { slot ->
                                     selectedSheetIndex = sheetIdx
                                     selectedSlotIndex = slot
@@ -586,8 +834,43 @@ fun CollageStudioDialog(
                         }
                     }
 
-                    // Integrated Floating Window with All Controls (Zoom, Rotation, +90°, X, Y, Z Scrubbers)
-                    if (selectedSheetIndex != null && selectedSlotIndex != null) {
+                    // Floating preview avatar of dragged image following the touch point
+                    if (dragController.isDragging && dragController.draggedBitmap != null) {
+                        val dragW = (dragController.dragItemSize.width * 0.75f).coerceIn(80f, 220f)
+                        val dragH = (dragController.dragItemSize.height * 0.75f).coerceIn(80f, 220f)
+                        Box(
+                            modifier = Modifier
+                                .offset {
+                                    IntOffset(
+                                        (dragController.currentRootPos.x - dragW / 2f).toInt(),
+                                        (dragController.currentRootPos.y - dragH / 2f).toInt()
+                                    )
+                                }
+                                .size(
+                                    width = with(LocalDensity.current) { dragW.toDp() },
+                                    height = with(LocalDensity.current) { dragH.toDp() }
+                                )
+                                .zIndex(999f)
+                                .graphicsLayer {
+                                    alpha = 0.88f
+                                    shadowElevation = 20f
+                                    scaleX = 1.05f
+                                    scaleY = 1.05f
+                                }
+                                .clip(RoundedCornerShape(8.dp))
+                                .border(2.5.dp, ScannerGreen, RoundedCornerShape(8.dp))
+                        ) {
+                            Image(
+                                bitmap = dragController.draggedBitmap!!.asImageBitmap(),
+                                contentDescription = "Moving Image",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+                    }
+
+                    // Integrated Floating Window with All Controls
+                    if (selectedSheetIndex != null && selectedSlotIndex != null && !dragController.isDragging) {
                         val sIdx = selectedSheetIndex!!
                         val slotIdx = selectedSlotIndex!!
                         val currentSheet = sheets.getOrNull(sIdx)
@@ -596,6 +879,7 @@ fun CollageStudioDialog(
                                 sheetIndex = sIdx,
                                 slotIndex = slotIdx,
                                 sheet = currentSheet,
+                                totalSheets = sheets.size,
                                 onCrop = {
                                     val p = currentSheet.slotAssignments[slotIdx]
                                     if (p != null) {
@@ -603,6 +887,64 @@ fun CollageStudioDialog(
                                         cropEditingSlotIndex = slotIdx
                                         cropEditingPage = p
                                     }
+                                },
+                                onMoveToPage = { targetSheetIdx ->
+                                    if (targetSheetIdx != sIdx && targetSheetIdx in 0 until sheets.size) {
+                                        val targetSheet = sheets[targetSheetIdx]
+                                        val maxSlots = selectedTemplate.layout.maxPages
+                                        val emptySlot = (0 until maxSlots).firstOrNull { targetSheet.slotAssignments[it] == null } ?: 0
+                                        val srcPage = currentSheet.slotAssignments[slotIdx]
+                                        val srcCrop = currentSheet.slotCroppedPaths[slotIdx]
+                                        val tgtPage = targetSheet.slotAssignments[emptySlot]
+                                        val tgtCrop = targetSheet.slotCroppedPaths[emptySlot]
+
+                                        if (srcPage != null) {
+                                            targetSheet.slotAssignments[emptySlot] = srcPage
+                                            if (srcCrop != null) targetSheet.slotCroppedPaths[emptySlot] = srcCrop
+                                            else targetSheet.slotCroppedPaths.remove(emptySlot)
+                                            targetSheet.slotTransforms[emptySlot] = SlotTransform()
+                                        }
+
+                                        if (tgtPage != null) {
+                                            currentSheet.slotAssignments[slotIdx] = tgtPage
+                                            if (tgtCrop != null) currentSheet.slotCroppedPaths[slotIdx] = tgtCrop
+                                            else currentSheet.slotCroppedPaths.remove(slotIdx)
+                                            currentSheet.slotTransforms[slotIdx] = SlotTransform()
+                                            Toast.makeText(context, "Swapped with Page ${targetSheetIdx + 1}", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            currentSheet.slotAssignments.remove(slotIdx)
+                                            currentSheet.slotCroppedPaths.remove(slotIdx)
+                                            currentSheet.slotTransforms.remove(slotIdx)
+                                            Toast.makeText(context, "Moved to Page ${targetSheetIdx + 1}", Toast.LENGTH_SHORT).show()
+                                        }
+
+                                        selectedSheetIndex = targetSheetIdx
+                                        selectedSlotIndex = emptySlot
+                                        scope.launch {
+                                            listState.animateScrollToItem(targetSheetIdx)
+                                        }
+                                    }
+                                },
+                                onAddNewPageAndMove = {
+                                    val newSheet = CollageSheetState()
+                                    sheets.add(newSheet)
+                                    val targetSheetIdx = sheets.size - 1
+                                    val srcPage = currentSheet.slotAssignments[slotIdx]
+                                    val srcCrop = currentSheet.slotCroppedPaths[slotIdx]
+                                    if (srcPage != null) {
+                                        newSheet.slotAssignments[0] = srcPage
+                                        if (srcCrop != null) newSheet.slotCroppedPaths[0] = srcCrop
+                                        newSheet.slotTransforms[0] = SlotTransform()
+                                        currentSheet.slotAssignments.remove(slotIdx)
+                                        currentSheet.slotCroppedPaths.remove(slotIdx)
+                                        currentSheet.slotTransforms.remove(slotIdx)
+                                    }
+                                    selectedSheetIndex = targetSheetIdx
+                                    selectedSlotIndex = 0
+                                    scope.launch {
+                                        listState.animateScrollToItem(targetSheetIdx)
+                                    }
+                                    Toast.makeText(context, "Moved to new Page ${sheets.size}", Toast.LENGTH_SHORT).show()
                                 },
                                 onClose = {
                                     selectedSheetIndex = null
@@ -713,11 +1055,15 @@ private fun FloatingTransformToolbar(
     sheetIndex: Int,
     slotIndex: Int,
     sheet: CollageSheetState,
+    totalSheets: Int = 1,
     onCrop: () -> Unit,
+    onMoveToPage: ((Int) -> Unit)? = null,
+    onAddNewPageAndMove: (() -> Unit)? = null,
     onClose: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val curTransform = sheet.slotTransforms[slotIndex] ?: SlotTransform()
+    var showMoveMenu by remember { mutableStateOf(false) }
 
     Surface(
         shape = RoundedCornerShape(16.dp),
@@ -731,7 +1077,7 @@ private fun FloatingTransformToolbar(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            // Row 1: Badge, Crop, Zoom Scrubber, Rotation Scrubber, Single 90° button, Reset, Close
+            // Row 1: Badge, Crop, Move to Page, Zoom Scrubber, Rotation Scrubber, Single 90° button, Reset, Close
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -753,6 +1099,46 @@ private fun FloatingTransformToolbar(
                 // Crop
                 IconButton(onClick = onCrop, modifier = Modifier.size(28.dp)) {
                     Icon(Icons.Outlined.Crop, contentDescription = "Crop", tint = Color.White, modifier = Modifier.size(17.dp))
+                }
+
+                // Move to Page Dropdown Menu
+                if (onMoveToPage != null) {
+                    Box {
+                        IconButton(onClick = { showMoveMenu = true }, modifier = Modifier.size(28.dp)) {
+                            Icon(
+                                Icons.AutoMirrored.Outlined.DriveFileMove,
+                                contentDescription = "Move to Page",
+                                tint = ScannerGreen,
+                                modifier = Modifier.size(17.dp)
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = showMoveMenu,
+                            onDismissRequest = { showMoveMenu = false },
+                            modifier = Modifier.background(Color(0xFF222222))
+                        ) {
+                            for (pIdx in 0 until totalSheets) {
+                                if (pIdx != sheetIndex) {
+                                    DropdownMenuItem(
+                                        text = { Text("Move to Page ${pIdx + 1}", color = Color.White, fontSize = 13.sp) },
+                                        onClick = {
+                                            showMoveMenu = false
+                                            onMoveToPage(pIdx)
+                                        }
+                                    )
+                                }
+                            }
+                            if (onAddNewPageAndMove != null) {
+                                DropdownMenuItem(
+                                    text = { Text("+ Move to New Page", color = ScannerGreen, fontWeight = FontWeight.Bold, fontSize = 13.sp) },
+                                    onClick = {
+                                        showMoveMenu = false
+                                        onAddNewPageAndMove()
+                                    }
+                                )
+                            }
+                        }
+                    }
                 }
 
                 // Zoom Scrubber (Drag Up/Right = +, Down/Left = -)
@@ -788,7 +1174,7 @@ private fun FloatingTransformToolbar(
                     },
                     modifier = Modifier.size(28.dp)
                 ) {
-                    Icon(Icons.Outlined.RotateRight, contentDescription = "+90°", tint = Color.White, modifier = Modifier.size(18.dp))
+                    Icon(Icons.AutoMirrored.Outlined.RotateRight, contentDescription = "+90°", tint = Color.White, modifier = Modifier.size(18.dp))
                 }
 
                 // Reset
@@ -891,7 +1277,7 @@ private fun ValueScrubber(
             .pointerInput(Unit) {
                 awaitPointerEventScope {
                     while (true) {
-                        val down = awaitFirstDown(requireUnconsumed = false)
+                        awaitFirstDown(requireUnconsumed = false)
                         var accumulatedValue = currentValue
                         var totalMovedX = 0f
                         var totalMovedY = 0f
@@ -1003,6 +1389,8 @@ private fun CollageSheetCard(
     isSheetSelected: Boolean,
     selectedSlotIndex: Int?,
     watermarkConfig: CollageWatermarkConfig,
+    dragController: CrossPageDragController,
+    onCommitCrossDrop: () -> Unit,
     onSelectSlot: (Int) -> Unit,
     onDeselect: () -> Unit,
     onDeleteSlot: (Int) -> Unit,
@@ -1010,10 +1398,7 @@ private fun CollageSheetCard(
     onTransformChange: (Int, SlotTransform) -> Unit
 ) {
     var sheetSize by remember { mutableStateOf(IntSize.Zero) }
-
-    // Snapping guidelines local state (isolated to this card so dragging doesn't recompose the entire dialog!)
-    var snapGuideVertical by remember { mutableStateOf(false) }
-    var snapGuideHorizontal by remember { mutableStateOf(false) }
+    val snapGuidesState = remember { SnapGuidesState() }
 
     Column(
         modifier = Modifier.fillMaxWidth(0.92f),
@@ -1058,6 +1443,9 @@ private fun CollageSheetCard(
                 .fillMaxWidth()
                 .aspectRatio(aspectRatio)
                 .onSizeChanged { sheetSize = it }
+                .onGloballyPositioned { coords ->
+                    dragController.sheetBoundsInRoot[sheetIndex] = coords.boundsInRoot()
+                }
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
                 // Layer 0: Tap background to deselect
@@ -1090,11 +1478,21 @@ private fun CollageSheetCard(
                         val customPath = sheetState.slotCroppedPaths[i]
                         val isSelected = isSheetSelected && selectedSlotIndex == i
 
+                        val isDropHovered = dragController.isDragging &&
+                            dragController.hoverSheetIndex == sheetIndex &&
+                            dragController.hoverSlotIndex == i &&
+                            (dragController.sourceSheetIndex != sheetIndex || dragController.sourceSlotIndex != i)
+
                         if (page != null || !customPath.isNullOrBlank()) {
                             PhotoshopCanvasItem(
+                                sheetIndex = sheetIndex,
                                 slotIndex = i,
                                 page = page,
                                 customImagePath = customPath,
+                                layout = layout,
+                                dragController = dragController,
+                                onCommitCrossDrop = onCommitCrossDrop,
+                                isDropHovered = isDropHovered,
                                 initCx = initCx,
                                 initCy = initCy,
                                 slotWidth = slotW,
@@ -1107,8 +1505,8 @@ private fun CollageSheetCard(
                                 onTransformChange = { newTrans -> onTransformChange(i, newTrans) },
                                 onDelete = { onDeleteSlot(i) },
                                 onSnapChange = { snapV, snapH ->
-                                    snapGuideVertical = snapV
-                                    snapGuideHorizontal = snapH
+                                    snapGuidesState.snapVertical = snapV
+                                    snapGuidesState.snapHorizontal = snapH
                                 }
                             )
                         } else {
@@ -1121,25 +1519,40 @@ private fun CollageSheetCard(
                                         height = with(LocalDensity.current) { slotH.toDp() }
                                     )
                                     .padding(6.dp)
-                                    .border(1.dp, Color(0xFFDDDDDD), RoundedCornerShape(4.dp))
+                                    .border(
+                                        width = if (isDropHovered) 2.5.dp else 1.dp,
+                                        color = if (isDropHovered) ScannerGreen else Color(0xFFDDDDDD),
+                                        shape = RoundedCornerShape(4.dp)
+                                    )
+                                    .background(if (isDropHovered) ScannerGreen.copy(alpha = 0.2f) else Color.Transparent)
                                     .clickable { onSelectSlot(i) },
                                 contentAlignment = Alignment.Center
                             ) {
                                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    Icon(Icons.Default.Add, contentDescription = "Add", tint = Color.Gray, modifier = Modifier.size(24.dp))
+                                    Icon(
+                                        imageVector = if (isDropHovered) Icons.Default.Check else Icons.Default.Add,
+                                        contentDescription = "Add",
+                                        tint = if (isDropHovered) ScannerGreen else Color.Gray,
+                                        modifier = Modifier.size(24.dp)
+                                    )
                                     Spacer(modifier = Modifier.height(2.dp))
-                                    Text("Add image", color = Color.Gray, fontSize = 10.5.sp)
+                                    Text(
+                                        text = if (isDropHovered) "Drop Here" else "Add image",
+                                        color = if (isDropHovered) ScannerGreen else Color.Gray,
+                                        fontWeight = if (isDropHovered) FontWeight.Bold else FontWeight.Normal,
+                                        fontSize = 10.5.sp
+                                    )
                                 }
                             }
                         }
                     }
                 }
 
-                // Magnetic Snapping Guidelines Overlay (Dashed Green Lines matching screenshot)
-                if (isSheetSelected && (snapGuideVertical || snapGuideHorizontal)) {
+                // Magnetic Snapping Guidelines Overlay (Dashed Green Lines)
+                if (isSheetSelected) {
                     Canvas(modifier = Modifier.fillMaxSize()) {
                         val dashEffect = PathEffect.dashPathEffect(floatArrayOf(14f, 8f), 0f)
-                        if (snapGuideVertical) {
+                        if (snapGuidesState.snapVertical) {
                             drawLine(
                                 color = ScannerGreen,
                                 start = Offset(size.width / 2f, 0f),
@@ -1148,7 +1561,7 @@ private fun CollageSheetCard(
                                 pathEffect = dashEffect
                             )
                         }
-                        if (snapGuideHorizontal) {
+                        if (snapGuidesState.snapHorizontal) {
                             drawLine(
                                 color = ScannerGreen,
                                 start = Offset(0f, size.height / 2f),
@@ -1198,20 +1611,59 @@ private fun CollageSheetCard(
 }
 
 /**
+ * Maps local coordinates inside an item Box to invariant root screen coordinates,
+ * taking into account the live graphicsLayer translation, scale, and rotation.
+ */
+private fun mapLocalItemToRoot(
+    localPos: Offset,
+    attachedCoords: LayoutCoordinates,
+    baseWidth: Float,
+    baseHeight: Float,
+    panX: Float,
+    panY: Float,
+    scale: Float,
+    rotationDeg: Float,
+    sheetWidth: Float,
+    sheetHeight: Float
+): Offset {
+    val cx = baseWidth / 2f
+    val cy = baseHeight / 2f
+    val rad = Math.toRadians(rotationDeg.toDouble())
+    val cosR = cos(rad).toFloat()
+    val sinR = sin(rad).toFloat()
+
+    val dx = (localPos.x - cx) * scale
+    val dy = (localPos.y - cy) * scale
+
+    val rotX = dx * cosR - dy * sinR
+    val rotY = dx * sinR + dy * cosR
+
+    val parentX = cx + rotX + panX * sheetWidth
+    val parentY = cy + rotY + panY * sheetHeight
+    return attachedCoords.localToRoot(Offset(parentX, parentY))
+}
+
+/**
  * Freeform Photoshop-style Canvas Item without rigid boxes.
  * Features:
  * - Border wraps EXACTLY to image size, not slot/column size.
  * - Corner handle simultaneously SCALES and ROTATES image smoothly.
  * - 1-finger move with magnetic snapping to vertical/horizontal center and edges.
  * - Red (X) delete handle on top-left.
- * - Zero flickering: transformations executed in graphicsLayer (Draw Phase) reading getTransform(),
+ * - Zero flickering: transformations executed in graphicsLayer (Draw Phase) reading live state in invariant root coordinates,
  *   so NO recomposition occurs during motion. Synchronous in-memory bitmap cache ensures zero blank frames.
+ * - Cross-page dragging: moving beyond drag threshold activates cross-page drag coordinator.
  */
 @Composable
 private fun PhotoshopCanvasItem(
+    sheetIndex: Int,
     slotIndex: Int,
     page: Page?,
     customImagePath: String?,
+    layout: CollageLayout,
+    dragController: CrossPageDragController,
+    onCommitCrossDrop: () -> Unit,
+    isDropHovered: Boolean,
     initCx: Float,
     initCy: Float,
     slotWidth: Float,
@@ -1230,6 +1682,7 @@ private fun PhotoshopCanvasItem(
     val currentOnTransformChange by rememberUpdatedState(onTransformChange)
     val currentOnSnapChange by rememberUpdatedState(onSnapChange)
     val currentOnDelete by rememberUpdatedState(onDelete)
+    val currentOnCommitCrossDrop by rememberUpdatedState(onCommitCrossDrop)
 
     // Synchronous cached bitmap lookup to eliminate all image loading flickers
     val imagePath = customImagePath ?: page?.processedImagePath
@@ -1248,13 +1701,39 @@ private fun PhotoshopCanvasItem(
         }
     }
 
-    // Calculate exact image dimensions fitted within slot rectangle (FitCenter)
-    // Ensures border wraps the actual image, NOT the column/slot box!
+    val imageBitmap = remember(cachedBitmap) {
+        cachedBitmap?.asImageBitmap()
+    }
+
     val bmpW = (cachedBitmap?.width ?: slotWidth.toInt()).toFloat().coerceAtLeast(10f)
     val bmpH = (cachedBitmap?.height ?: slotHeight.toInt()).toFloat().coerceAtLeast(10f)
     val fitScale = minOf(slotWidth / bmpW, slotHeight / bmpH)
     val baseWidth = bmpW * fitScale
     val baseHeight = bmpH * fitScale
+
+    val curTransform = getTransform()
+    var livePanX by remember { mutableFloatStateOf(curTransform.panX) }
+    var livePanY by remember { mutableFloatStateOf(curTransform.panY) }
+    var liveScale by remember { mutableFloatStateOf(curTransform.scale) }
+    var liveRotation by remember { mutableFloatStateOf(curTransform.rotation) }
+    var liveZIndex by remember { mutableFloatStateOf(curTransform.zIndex) }
+
+    // Keep live values synced when external changes occur (e.g., toolbar reset or scrubber)
+    LaunchedEffect(curTransform) {
+        livePanX = curTransform.panX
+        livePanY = curTransform.panY
+        liveScale = curTransform.scale
+        liveRotation = curTransform.rotation
+        liveZIndex = curTransform.zIndex
+    }
+
+    var itemCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
+
+    // Check if this item is currently being dragged across pages
+    val isBeingCrossDragged = dragController.isDragging &&
+        dragController.sourceSheetIndex == sheetIndex &&
+        dragController.sourceSlotIndex == slotIndex &&
+        (dragController.hoverSheetIndex != sheetIndex || dragController.hoverSlotIndex != slotIndex)
 
     Box(
         modifier = Modifier
@@ -1268,18 +1747,19 @@ private fun PhotoshopCanvasItem(
                 width = with(density) { baseWidth.toDp() },
                 height = with(density) { baseHeight.toDp() }
             )
-            .zIndex(getTransform().zIndex)
+            .zIndex(if (isSelected) liveZIndex + 10f else liveZIndex)
+            .onGloballyPositioned { itemCoordinates = it }
             .graphicsLayer {
-                // Reading getTransform() in Draw Phase -> ZERO recomposition during motion
-                val t = getTransform()
-                translationX = t.panX * sheetWidth
-                translationY = t.panY * sheetHeight
-                scaleX = t.scale
-                scaleY = t.scale
-                rotationZ = t.rotation
+                // Reading live values purely in Draw Phase -> ZERO recomposition during motion!
+                translationX = livePanX * sheetWidth
+                translationY = livePanY * sheetHeight
+                scaleX = liveScale
+                scaleY = liveScale
+                rotationZ = liveRotation
+                alpha = if (isBeingCrossDragged) 0.35f else 1.0f
             }
     ) {
-        // Image content with 1-finger move and 2-finger physical rotate/zoom
+        // Image content with gesture handling
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -1291,146 +1771,203 @@ private fun PhotoshopCanvasItem(
                             val down = awaitFirstDown(requireUnconsumed = false)
                             currentOnSelect()
                             down.consume()
-                            var prevCentroid = down.position
 
-                            val initialTransform = getTransform()
-                            var activePanX = initialTransform.panX
-                            var activePanY = initialTransform.panY
-                            var activeScale = initialTransform.scale
-                            var activeRotation = initialTransform.rotation
-                            var activeZIndex = initialTransform.zIndex
+                            val coords = itemCoordinates
+                            if (coords == null || !coords.isAttached) continue
+
+                            val startPanX = livePanX
+                            val startPanY = livePanY
+                            val startScale = liveScale
+                            val startRotation = liveRotation
+
+                            val startRootPos = mapLocalItemToRoot(
+                                down.position,
+                                coords,
+                                baseWidth,
+                                baseHeight,
+                                startPanX,
+                                startPanY,
+                                startScale,
+                                startRotation,
+                                sheetWidth,
+                                sheetHeight
+                            )
+                            var prevRootPos = startRootPos
+                            var isCrossDragging = false
+                            val sheetBounds = dragController.sheetBoundsInRoot[sheetIndex]
 
                             while (true) {
                                 val event = awaitPointerEvent(PointerEventPass.Main)
                                 val pressed = event.changes.filter { it.pressed }
                                 if (pressed.isEmpty()) {
                                     currentOnSnapChange(false, false)
+                                    if (isCrossDragging && dragController.isDragging) {
+                                        val tgtSheet = dragController.hoverSheetIndex
+                                        val tgtSlot = dragController.hoverSlotIndex
+                                        if (tgtSheet != null && tgtSlot != null && (tgtSheet != sheetIndex || tgtSlot != slotIndex)) {
+                                            currentOnCommitCrossDrop()
+                                        } else {
+                                            dragController.cancelDrag()
+                                            currentOnTransformChange(
+                                                SlotTransform(
+                                                    scale = liveScale,
+                                                    panX = livePanX,
+                                                    panY = livePanY,
+                                                    rotation = (liveRotation % 360f + 360f) % 360f,
+                                                    zIndex = liveZIndex
+                                                )
+                                            )
+                                        }
+                                    } else {
+                                        // Commit final transform state
+                                        currentOnTransformChange(
+                                            SlotTransform(
+                                                scale = liveScale,
+                                                panX = livePanX,
+                                                panY = livePanY,
+                                                rotation = (liveRotation % 360f + 360f) % 360f,
+                                                zIndex = liveZIndex
+                                            )
+                                        )
+                                    }
                                     break
                                 }
 
                                 val count = pressed.size
-                                if (count == 1) {
-                                    val currentPos = pressed[0].position
-                                    val localDelta = currentPos - prevCentroid
-                                    prevCentroid = currentPos
+                                val attachedCoords = itemCoordinates
+                                if (attachedCoords != null && attachedCoords.isAttached) {
+                                    if (count == 1) {
+                                        val curRoot = mapLocalItemToRoot(
+                                            pressed[0].position,
+                                            attachedCoords,
+                                            baseWidth,
+                                            baseHeight,
+                                            livePanX,
+                                            livePanY,
+                                            liveScale,
+                                            liveRotation,
+                                            sheetWidth,
+                                            sheetHeight
+                                        )
+                                        val totalRootDx = curRoot.x - startRootPos.x
+                                        val totalRootDy = curRoot.y - startRootPos.y
+                                        val totalDist = kotlin.math.hypot(totalRootDx, totalRootDy)
 
-                                    if (localDelta.x != 0f || localDelta.y != 0f) {
-                                        val rad = Math.toRadians(activeRotation.toDouble())
-                                        val cosA = cos(rad).toFloat()
-                                        val sinA = sin(rad).toFloat()
-                                        val worldDx = (localDelta.x * cosA - localDelta.y * sinA) * activeScale
-                                        val worldDy = (localDelta.x * sinA + localDelta.y * cosA) * activeScale
+                                        // Activate cross-page dragging if moving outside current sheet or dragging far across sheets
+                                        val isOutsideSheet = sheetBounds != null && !sheetBounds.contains(curRoot)
+                                        if (isOutsideSheet || totalDist > 140f) {
+                                            if (!isCrossDragging) {
+                                                isCrossDragging = true
+                                                dragController.startDrag(
+                                                    sheetIndex = sheetIndex,
+                                                    slotIndex = slotIndex,
+                                                    page = page,
+                                                    customPath = customImagePath,
+                                                    bitmap = cachedBitmap,
+                                                    itemSize = IntSize(baseWidth.toInt(), baseHeight.toInt()),
+                                                    rootPos = curRoot
+                                                )
+                                            }
+                                            dragController.updateDragPosition(curRoot, layout)
+                                        } else if (isCrossDragging) {
+                                            isCrossDragging = false
+                                            dragController.cancelDrag()
+                                        }
 
-                                        activePanX += (worldDx / sheetWidth.coerceAtLeast(1f))
-                                        activePanY += (worldDy / sheetHeight.coerceAtLeast(1f))
+                                        // Pan using invariant root displacement
+                                        var newPanX = startPanX + (totalRootDx / sheetWidth.coerceAtLeast(1f))
+                                        var newPanY = startPanY + (totalRootDy / sheetHeight.coerceAtLeast(1f))
 
                                         // Magnetic center and edge snapping
-                                        val curCenterX = initCx + activePanX * sheetWidth
-                                        val curCenterY = initCy + activePanY * sheetHeight
+                                        val curCenterX = initCx + newPanX * sheetWidth
+                                        val curCenterY = initCy + newPanY * sheetHeight
                                         val pageCenterX = sheetWidth / 2f
                                         val pageCenterY = sheetHeight / 2f
 
                                         var snapV = false
                                         var snapH = false
 
-                                        // Center horizontal snap (vertical dashed guide line down sheet center)
                                         if (kotlin.math.abs(curCenterX - pageCenterX) < SNAP_THRESHOLD_PX) {
-                                            activePanX = (pageCenterX - initCx) / sheetWidth
+                                            newPanX = (pageCenterX - initCx) / sheetWidth
                                             snapV = true
                                         }
-
-                                        // Center vertical snap (horizontal dashed guide line across sheet center)
                                         if (kotlin.math.abs(curCenterY - pageCenterY) < SNAP_THRESHOLD_PX) {
-                                            activePanY = (pageCenterY - initCy) / sheetHeight
+                                            newPanY = (pageCenterY - initCy) / sheetHeight
                                             snapH = true
                                         }
 
                                         // Page boundary snapping
-                                        val halfW = (baseWidth * activeScale) / 2f
-                                        val halfH = (baseHeight * activeScale) / 2f
+                                        val halfW = (baseWidth * liveScale) / 2f
+                                        val halfH = (baseHeight * liveScale) / 2f
                                         if (kotlin.math.abs(curCenterX - halfW) < SNAP_THRESHOLD_PX) {
-                                            activePanX = (halfW - initCx) / sheetWidth
+                                            newPanX = (halfW - initCx) / sheetWidth
                                         }
                                         if (kotlin.math.abs((curCenterX + halfW) - sheetWidth) < SNAP_THRESHOLD_PX) {
-                                            activePanX = (sheetWidth - halfW - initCx) / sheetWidth
+                                            newPanX = (sheetWidth - halfW - initCx) / sheetWidth
                                         }
                                         if (kotlin.math.abs(curCenterY - halfH) < SNAP_THRESHOLD_PX) {
-                                            activePanY = (halfH - initCy) / sheetHeight
+                                            newPanY = (halfH - initCy) / sheetHeight
                                         }
                                         if (kotlin.math.abs((curCenterY + halfH) - sheetHeight) < SNAP_THRESHOLD_PX) {
-                                            activePanY = (sheetHeight - halfH - initCy) / sheetHeight
+                                            newPanY = (sheetHeight - halfH - initCy) / sheetHeight
                                         }
 
+                                        livePanX = newPanX
+                                        livePanY = newPanY
                                         currentOnSnapChange(snapV, snapH)
-                                        currentOnTransformChange(
-                                            SlotTransform(
-                                                scale = activeScale,
-                                                panX = activePanX,
-                                                panY = activePanY,
-                                                rotation = activeRotation,
-                                                zIndex = activeZIndex
-                                            )
+                                        pressed[0].consume()
+                                    } else if (count >= 2) {
+                                        if (isCrossDragging) {
+                                            isCrossDragging = false
+                                            dragController.cancelDrag()
+                                        }
+                                        val p0 = mapLocalItemToRoot(
+                                            pressed[0].position,
+                                            attachedCoords,
+                                            baseWidth,
+                                            baseHeight,
+                                            livePanX,
+                                            livePanY,
+                                            liveScale,
+                                            liveRotation,
+                                            sheetWidth,
+                                            sheetHeight
                                         )
-                                    }
-                                    pressed[0].consume()
-                                } else if (count >= 2) {
-                                    val p0 = pressed[0].position
-                                    val p1 = pressed[1].position
-                                    val centroid = (p0 + p1) / 2f
-                                    val localPan = centroid - prevCentroid
-                                    prevCentroid = centroid
-
-                                    val zoomChange = event.calculateZoom()
-                                    val rotationChange = event.calculateRotation()
-
-                                    val rad = Math.toRadians(activeRotation.toDouble())
-                                    val cosA = cos(rad).toFloat()
-                                    val sinA = sin(rad).toFloat()
-                                    val worldDx = (localPan.x * cosA - localPan.y * sinA) * activeScale
-                                    val worldDy = (localPan.x * sinA + localPan.y * cosA) * activeScale
-
-                                    activeScale = (activeScale * zoomChange).coerceIn(0.2f, 5.0f)
-                                    activeRotation = (activeRotation + rotationChange) % 360f
-                                    activePanX += (worldDx / sheetWidth.coerceAtLeast(1f))
-                                    activePanY += (worldDy / sheetHeight.coerceAtLeast(1f))
-
-                                    val curCenterX = initCx + activePanX * sheetWidth
-                                    val curCenterY = initCy + activePanY * sheetHeight
-                                    val pageCenterX = sheetWidth / 2f
-                                    val pageCenterY = sheetHeight / 2f
-
-                                    var snapV = false
-                                    var snapH = false
-
-                                    if (kotlin.math.abs(curCenterX - pageCenterX) < SNAP_THRESHOLD_PX) {
-                                        activePanX = (pageCenterX - initCx) / sheetWidth
-                                        snapV = true
-                                    }
-                                    if (kotlin.math.abs(curCenterY - pageCenterY) < SNAP_THRESHOLD_PX) {
-                                        activePanY = (pageCenterY - initCy) / sheetHeight
-                                        snapH = true
-                                    }
-
-                                    currentOnSnapChange(snapV, snapH)
-                                    currentOnTransformChange(
-                                        SlotTransform(
-                                            scale = activeScale,
-                                            panX = activePanX,
-                                            panY = activePanY,
-                                            rotation = activeRotation,
-                                            zIndex = activeZIndex
+                                        val p1 = mapLocalItemToRoot(
+                                            pressed[1].position,
+                                            attachedCoords,
+                                            baseWidth,
+                                            baseHeight,
+                                            livePanX,
+                                            livePanY,
+                                            liveScale,
+                                            liveRotation,
+                                            sheetWidth,
+                                            sheetHeight
                                         )
-                                    )
-                                    pressed.forEach { it.consume() }
+                                        val centroid = (p0 + p1) / 2f
+                                        val rootDelta = centroid - prevRootPos
+                                        prevRootPos = centroid
+
+                                        val zoomChange = event.calculateZoom()
+                                        val rotationChange = event.calculateRotation()
+
+                                        liveScale = (liveScale * zoomChange).coerceIn(0.2f, 5.0f)
+                                        liveRotation = (liveRotation + rotationChange) % 360f
+                                        livePanX += rootDelta.x / sheetWidth.coerceAtLeast(1f)
+                                        livePanY += rootDelta.y / sheetHeight.coerceAtLeast(1f)
+
+                                        pressed.forEach { it.consume() }
+                                    }
                                 }
                             }
                         }
                     }
                 }
         ) {
-            if (cachedBitmap != null) {
+            if (imageBitmap != null) {
                 Image(
-                    bitmap = cachedBitmap!!.asImageBitmap(),
+                    bitmap = imageBitmap,
                     contentDescription = "Image ${slotIndex + 1}",
                     contentScale = ContentScale.FillBounds,
                     modifier = Modifier.fillMaxSize()
@@ -1445,16 +1982,40 @@ private fun PhotoshopCanvasItem(
             }
         }
 
-        // Selection Border & Corner Handles (Matching exact screenshot & image dimensions)
-        if (isSelected) {
-            // Border wraps the EXACT image boundaries
+        // Drop target indicator overlay when another item is dragged over this slot
+        if (isDropHovered) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .border(2.5.dp, ScannerGreen, RoundedCornerShape(2.dp))
+                    .background(ScannerGreen.copy(alpha = 0.25f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = Color(0xFF1E2822),
+                    border = BorderStroke(1.dp, ScannerGreen)
+                ) {
+                    Text(
+                        text = "Swap",
+                        color = ScannerGreen,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 11.sp,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+            }
+        }
+
+        // Selection Border & Corner Handles
+        if (isSelected && !dragController.isDragging) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .border(1.5.dp, ScannerGreen, RoundedCornerShape(2.dp))
             )
 
-            // Top-Left: Red circular close/delete button
+            // Top-Left: Red circular delete button
             Box(
                 modifier = Modifier
                     .align(Alignment.TopStart)
@@ -1482,53 +2043,93 @@ private fun PhotoshopCanvasItem(
                     .clip(CircleShape)
                     .background(ScannerGreen)
                     .pointerInput(slotIndex) {
+                        val handleOffsetPx = with(density) { 11.dp.toPx() }
+                        val handleSizePx = with(density) { 28.dp.toPx() }
+                        val handleTopLeft = Offset(
+                            baseWidth - handleSizePx + handleOffsetPx,
+                            baseHeight - handleSizePx + handleOffsetPx
+                        )
+
                         awaitPointerEventScope {
                             while (true) {
                                 val down = awaitFirstDown(requireUnconsumed = false)
                                 down.consume()
 
-                                val startTransform = getTransform()
-                                val startScale = startTransform.scale
-                                val startRotation = startTransform.rotation
-                                val baseRadius = kotlin.math.hypot(baseWidth / 2f, baseHeight / 2f).coerceAtLeast(1f)
-                                val baseAngleDeg = Math.toDegrees(kotlin.math.atan2(baseHeight / 2f, baseWidth / 2f).toDouble()).toFloat()
+                                val iCoords = itemCoordinates
+                                if (iCoords == null || !iCoords.isAttached) {
+                                    continue
+                                }
 
-                                var totalDx = 0f
-                                var totalDy = 0f
+                                val centerParent = Offset(
+                                    baseWidth / 2f + livePanX * sheetWidth,
+                                    baseHeight / 2f + livePanY * sheetHeight
+                                )
+                                val centerRoot = iCoords.localToRoot(centerParent)
+                                val downRoot = mapLocalItemToRoot(
+                                    handleTopLeft + down.position,
+                                    iCoords,
+                                    baseWidth,
+                                    baseHeight,
+                                    livePanX,
+                                    livePanY,
+                                    liveScale,
+                                    liveRotation,
+                                    sheetWidth,
+                                    sheetHeight
+                                )
+                                val initVec = downRoot - centerRoot
+                                val initialRadius = kotlin.math.hypot(initVec.x, initVec.y).coerceAtLeast(1f)
+                                val initialAngleRad = kotlin.math.atan2(initVec.y.toDouble(), initVec.x.toDouble())
+
+                                val startScale = liveScale
+                                val startRotation = liveRotation
 
                                 while (true) {
                                     val event = awaitPointerEvent(PointerEventPass.Main)
                                     val pressed = event.changes.filter { it.pressed }
-                                    if (pressed.isEmpty()) break
-
-                                    val dragChange = pressed[0].positionChange()
-                                    totalDx += dragChange.x
-                                    totalDy += dragChange.y
-
-                                    // Vector from center to initial corner in rotated sheet space
-                                    val rad = Math.toRadians((startRotation + baseAngleDeg).toDouble())
-                                    val initialCornerX = kotlin.math.cos(rad).toFloat() * (baseRadius * startScale)
-                                    val initialCornerY = kotlin.math.sin(rad).toFloat() * (baseRadius * startScale)
-
-                                    // New corner position relative to image center
-                                    val newCornerX = initialCornerX + totalDx
-                                    val newCornerY = initialCornerY + totalDy
-
-                                    // 1. Proportional scale based on distance from center
-                                    val newRadius = kotlin.math.hypot(newCornerX, newCornerY)
-                                    val newScale = (newRadius / baseRadius).coerceIn(0.2f, 5.0f)
-
-                                    // 2. Physical rotation based on angle from center
-                                    val currentAngleDeg = Math.toDegrees(kotlin.math.atan2(newCornerY, newCornerX).toDouble()).toFloat()
-                                    val deltaAngle = currentAngleDeg - (startRotation + baseAngleDeg)
-                                    val newRotation = (startRotation + deltaAngle) % 360f
-
-                                    currentOnTransformChange(
-                                        startTransform.copy(
-                                            scale = newScale,
-                                            rotation = (newRotation + 360f) % 360f
+                                    if (pressed.isEmpty()) {
+                                        currentOnTransformChange(
+                                            SlotTransform(
+                                                scale = liveScale,
+                                                panX = livePanX,
+                                                panY = livePanY,
+                                                rotation = (liveRotation % 360f + 360f) % 360f,
+                                                zIndex = liveZIndex
+                                            )
                                         )
-                                    )
+                                        break
+                                    }
+
+                                    val curCoords = itemCoordinates
+                                    if (curCoords != null && curCoords.isAttached) {
+                                        val curCenterRoot = curCoords.localToRoot(
+                                            Offset(
+                                                baseWidth / 2f + livePanX * sheetWidth,
+                                                baseHeight / 2f + livePanY * sheetHeight
+                                            )
+                                        )
+                                        val curRoot = mapLocalItemToRoot(
+                                            handleTopLeft + pressed[0].position,
+                                            curCoords,
+                                            baseWidth,
+                                            baseHeight,
+                                            livePanX,
+                                            livePanY,
+                                            liveScale,
+                                            liveRotation,
+                                            sheetWidth,
+                                            sheetHeight
+                                        )
+                                        val curVec = curRoot - curCenterRoot
+                                        val curRadius = kotlin.math.hypot(curVec.x, curVec.y)
+                                        val curAngleRad = kotlin.math.atan2(curVec.y.toDouble(), curVec.x.toDouble())
+
+                                        val scaleFactor = curRadius / initialRadius
+                                        liveScale = (startScale * scaleFactor).coerceIn(0.2f, 5.0f)
+
+                                        val deltaAngleDeg = Math.toDegrees(curAngleRad - initialAngleRad).toFloat()
+                                        liveRotation = (startRotation + deltaAngleDeg) % 360f
+                                    }
                                     pressed[0].consume()
                                 }
                             }

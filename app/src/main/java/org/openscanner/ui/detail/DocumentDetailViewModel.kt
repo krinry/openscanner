@@ -277,19 +277,36 @@ class DocumentDetailViewModel(application: Application) : AndroidViewModel(appli
         slotCustomPaths: Map<Int, String>? = null,
         onDone: () -> Unit
     ) {
-        val docId = _document.value?.id ?: return
+        val doc = _document.value ?: return
+        val docTitle = doc.title.replace(Regex("[^a-zA-Z0-9_\\-]"), "_").ifBlank { "scan" }
         viewModelScope.launch {
             _isGeneratingPdf.value = true
             try {
+                val collageDocTitle = if (docTitle.startsWith("collage-")) docTitle else "collage-${docTitle}"
+                val spec = org.openscanner.data.repository.CollagePageSpec(
+                    layout = layout,
+                    pageIds = pageIds,
+                    slotTransforms = slotTransforms ?: emptyMap(),
+                    slotCustomPaths = slotCustomPaths ?: emptyMap()
+                )
+                repository.createCollageDocument(
+                    sourceDocId = doc.id,
+                    specs = listOf(spec),
+                    watermarkConfig = watermarkConfig,
+                    drawBorders = drawBorders,
+                    customTitle = collageDocTitle
+                )
                 repository.createCollagePage(
-                    documentId = docId,
+                    documentId = doc.id,
                     pageIds = pageIds,
                     layout = layout,
                     watermarkConfig = watermarkConfig,
                     slotTransforms = slotTransforms,
                     drawBorders = drawBorders,
-                    slotCustomPaths = slotCustomPaths
+                    slotCustomPaths = slotCustomPaths,
+                    customFileName = docTitle
                 )
+                load(doc.id)
                 withContext(Dispatchers.Main) {
                     _isGeneratingPdf.value = false
                     onDone()
@@ -309,16 +326,27 @@ class DocumentDetailViewModel(application: Application) : AndroidViewModel(appli
         drawBorders: Boolean = false,
         onDone: () -> Unit
     ) {
-        val docId = _document.value?.id ?: return
+        val doc = _document.value ?: return
+        val docTitle = doc.title.replace(Regex("[^a-zA-Z0-9_\\-]"), "_").ifBlank { "scan" }
         viewModelScope.launch {
             _isGeneratingPdf.value = true
             try {
-                repository.createCollagePages(
-                    documentId = docId,
+                val collageDocTitle = if (docTitle.startsWith("collage-")) docTitle else "collage-${docTitle}"
+                repository.createCollageDocument(
+                    sourceDocId = doc.id,
                     specs = specs,
                     watermarkConfig = watermarkConfig,
-                    drawBorders = drawBorders
+                    drawBorders = drawBorders,
+                    customTitle = collageDocTitle
                 )
+                repository.createCollagePages(
+                    documentId = doc.id,
+                    specs = specs,
+                    watermarkConfig = watermarkConfig,
+                    drawBorders = drawBorders,
+                    customFileName = docTitle
+                )
+                load(doc.id)
                 withContext(Dispatchers.Main) {
                     _isGeneratingPdf.value = false
                     onDone()

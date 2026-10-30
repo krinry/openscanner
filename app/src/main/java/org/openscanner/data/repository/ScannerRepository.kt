@@ -393,15 +393,28 @@ class ScannerRepository(
         processedBitmap: Bitmap,
         originalBitmap: Bitmap?,
         cropBorderJson: String,
-        enhanceModeId: Int
+        enhanceModeId: Int,
+        fileNamePrefix: String? = null
     ): Page = withContext(Dispatchers.IO) {
         val scansDir = File(context.filesDir, "scans").apply { if (!exists()) mkdirs() }
         val thumbsDir = File(context.filesDir, "thumbs").apply { if (!exists()) mkdirs() }
 
         val timestamp = System.currentTimeMillis()
-        val processedFile = File(scansDir, "page_${documentId}_${timestamp}.jpg")
-        val originalFile = File(scansDir, "orig_${documentId}_${timestamp}.jpg")
-        val thumbFile = File(thumbsDir, "thumb_${documentId}_${timestamp}.jpg")
+        val processedFile = if (!fileNamePrefix.isNullOrBlank()) {
+            File(scansDir, "${fileNamePrefix}_${timestamp}.jpg")
+        } else {
+            File(scansDir, "page_${documentId}_${timestamp}.jpg")
+        }
+        val originalFile = if (!fileNamePrefix.isNullOrBlank()) {
+            File(scansDir, "orig_${fileNamePrefix}_${timestamp}.jpg")
+        } else {
+            File(scansDir, "orig_${documentId}_${timestamp}.jpg")
+        }
+        val thumbFile = if (!fileNamePrefix.isNullOrBlank()) {
+            File(thumbsDir, "thumb_${fileNamePrefix}_${timestamp}.jpg")
+        } else {
+            File(thumbsDir, "thumb_${documentId}_${timestamp}.jpg")
+        }
 
         // Save processed full image
         FileOutputStream(processedFile).use { out ->
@@ -518,7 +531,8 @@ class ScannerRepository(
         watermarkConfig: org.openscanner.cv.CollageWatermarkConfig? = null,
         slotTransforms: Map<Int, org.openscanner.cv.SlotTransform>? = null,
         drawBorders: Boolean = false,
-        slotCustomPaths: Map<Int, String>? = null
+        slotCustomPaths: Map<Int, String>? = null,
+        customFileName: String? = null
     ): Page = withContext(Dispatchers.IO) {
         val targetSlotRects = CollageGenerator.calculateSlotRects(layout)
         val bitmaps = mutableListOf<Bitmap?>()
@@ -575,12 +589,18 @@ class ScannerRepository(
             }
         }
 
+        val doc = documentDao.getDocumentById(documentId)
+        val cleanDocTitle = doc?.title?.replace(Regex("[^a-zA-Z0-9_\\-]"), "_")?.ifBlank { "doc_${documentId}" } ?: "doc_${documentId}"
+        val baseName = customFileName ?: cleanDocTitle
+        val collagePrefix = if (baseName.startsWith("collage-")) baseName else "collage-${baseName}"
+
         savePage(
             documentId = documentId,
             processedBitmap = collageBitmap,
             originalBitmap = collageBitmap,
             cropBorderJson = "",
-            enhanceModeId = 1
+            enhanceModeId = 1,
+            fileNamePrefix = collagePrefix
         )
     }
 
@@ -588,9 +608,12 @@ class ScannerRepository(
         documentId: Long,
         specs: List<CollagePageSpec>,
         watermarkConfig: org.openscanner.cv.CollageWatermarkConfig? = null,
-        drawBorders: Boolean = false
+        drawBorders: Boolean = false,
+        customFileName: String? = null
     ): List<Page> = withContext(Dispatchers.IO) {
-        specs.map { spec ->
+        specs.mapIndexed { specIndex, spec ->
+            val pageSuffix = if (specs.size > 1) "_p${specIndex + 1}" else ""
+            val specFileName = customFileName?.let { "$it$pageSuffix" }
             createCollagePage(
                 documentId = documentId,
                 pageIds = spec.pageIds,
@@ -598,9 +621,31 @@ class ScannerRepository(
                 watermarkConfig = watermarkConfig,
                 slotTransforms = spec.slotTransforms,
                 drawBorders = drawBorders,
-                slotCustomPaths = spec.slotCustomPaths
+                slotCustomPaths = spec.slotCustomPaths,
+                customFileName = specFileName
             )
         }
+    }
+
+    suspend fun createCollageDocument(
+        sourceDocId: Long,
+        specs: List<CollagePageSpec>,
+        watermarkConfig: org.openscanner.cv.CollageWatermarkConfig? = null,
+        drawBorders: Boolean = false,
+        customTitle: String? = null
+    ): Long = withContext(Dispatchers.IO) {
+        val sourceDoc = documentDao.getDocumentById(sourceDocId)
+        val baseTitle = sourceDoc?.title?.replace(Regex("[^a-zA-Z0-9_\\-]"), "_")?.ifBlank { "scan" } ?: "scan"
+        val docTitle = customTitle ?: if (baseTitle.startsWith("collage-")) baseTitle else "collage-${baseTitle}"
+        val newDocId = createNewDocument(title = docTitle, folderId = sourceDoc?.folderId ?: -1L)
+        createCollagePages(
+            documentId = newDocId,
+            specs = specs,
+            watermarkConfig = watermarkConfig,
+            drawBorders = drawBorders,
+            customFileName = baseTitle
+        )
+        newDocId
     }
 
     suspend fun reorderPages(documentId: Long, orderedPages: List<Page>) = withContext(Dispatchers.IO) {

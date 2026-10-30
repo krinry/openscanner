@@ -560,6 +560,7 @@ fun DocumentDetailScreen(
     if (showCollageDialog) {
         CollageStudioDialog(
             pages = pages,
+            documentTitle = document?.title ?: "scan",
             onDismiss = { showCollageDialog = false },
             onGenerateMultiCollage = { specs, watermarkConfig, drawBorders ->
                 viewModel.createMultiPageCollage(specs, watermarkConfig, drawBorders) {
