@@ -1,9 +1,14 @@
 package org.openscanner.data.repository
 
+import android.content.ContentValues
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
 import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
@@ -17,6 +22,7 @@ import org.openscanner.data.model.Document
 import org.openscanner.data.model.Folder
 import org.openscanner.data.model.Page
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.*
@@ -393,15 +399,21 @@ class ScannerRepository(
         processedBitmap: Bitmap,
         originalBitmap: Bitmap?,
         cropBorderJson: String,
-        enhanceModeId: Int
+        enhanceModeId: Int,
+        fileNamePrefix: String? = null
     ): Page = withContext(Dispatchers.IO) {
         val scansDir = File(context.filesDir, "scans").apply { if (!exists()) mkdirs() }
         val thumbsDir = File(context.filesDir, "thumbs").apply { if (!exists()) mkdirs() }
 
         val timestamp = System.currentTimeMillis()
-        val processedFile = File(scansDir, "page_${documentId}_${timestamp}.jpg")
-        val originalFile = File(scansDir, "orig_${documentId}_${timestamp}.jpg")
-        val thumbFile = File(thumbsDir, "thumb_${documentId}_${timestamp}.jpg")
+        val prefix = if (!fileNamePrefix.isNullOrBlank()) {
+            fileNamePrefix
+        } else {
+            "page_${documentId}"
+        }
+        val processedFile = File(scansDir, "${prefix}_${timestamp}.jpg")
+        val originalFile = File(scansDir, "orig_${prefix}_${timestamp}.jpg")
+        val thumbFile = File(thumbsDir, "thumb_${prefix}_${timestamp}.jpg")
 
         // Save processed full image
         FileOutputStream(processedFile).use { out ->
@@ -511,6 +523,169 @@ class ScannerRepository(
         }
     }
 
+    suspend fun updatePageBitmap(
+        pageId: Long,
+        newBitmap: Bitmap,
+        cropBorderJson: String? = null,
+        enhanceModeId: Int? = null,
+        rotationDegrees: Int? = null,
+        brightness: Int? = null,
+        contrast: Int? = null
+    ): Page? = withContext(Dispatchers.IO) {
+        val page = pageDao.getPageById(pageId) ?: return@withContext null
+        val processedFile = File(page.processedImagePath)
+        FileOutputStream(processedFile).use { out ->
+            newBitmap.compress(Bitmap.CompressFormat.JPEG, 92, out)
+        }
+        val thumbFile = File(page.thumbnailPath)
+        val thumb = Bitmap.createScaledBitmap(
+            newBitmap,
+            240,
+            (240f * newBitmap.height / newBitmap.width).toInt().coerceAtLeast(1),
+            true
+        )
+        FileOutputStream(thumbFile).use { out ->
+            thumb.compress(Bitmap.CompressFormat.JPEG, 80, out)
+        }
+
+        val updatedPage = page.copy(
+            cropBorderJson = cropBorderJson ?: page.cropBorderJson,
+            enhanceMode = enhanceModeId ?: page.enhanceMode,
+            rotationDegrees = rotationDegrees ?: page.rotationDegrees,
+            brightness = brightness ?: page.brightness,
+            contrast = contrast ?: page.contrast
+        )
+        pageDao.updatePage(updatedPage)
+        val doc = documentDao.getDocumentById(page.documentId)
+        if (doc != null) {
+            documentDao.updateDocument(doc.copy(modifiedTime = System.currentTimeMillis()))
+        }
+        updatedPage
+    }
+
+    suspend fun applyWatermarkToPage(
+        pageId: Long,
+        watermarkText: String,
+        color: Int = 0x88888888.toInt(),
+        opacity: Float = 0.35f,
+        isTiled: Boolean = false,
+        angle: Float = -45f
+    ): Page? = withContext(Dispatchers.IO) {
+        val page = pageDao.getPageById(pageId) ?: return@withContext null
+        val file = File(page.processedImagePath)
+        if (!file.exists()) return@withContext null
+        val bmp = BitmapFactory.decodeFile(file.absolutePath) ?: return@withContext null
+        val mutable = bmp.copy(Bitmap.Config.ARGB_8888, true)
+        val canvas = Canvas(mutable)
+        CollageGenerator.drawWatermarkOnCanvas(
+            canvas = canvas,
+            canvasWidth = mutable.width,
+            canvasHeight = mutable.height,
+            config = org.openscanner.cv.CollageWatermarkConfig(
+                text = watermarkText,
+                color = color,
+                opacity = opacity,
+                isTiled = isTiled,
+                rotationAngle = angle
+            )
+        )
+        FileOutputStream(file).use { out ->
+            mutable.compress(Bitmap.CompressFormat.JPEG, 92, out)
+        }
+        val thumbFile = File(page.thumbnailPath)
+        val thumb = Bitmap.createScaledBitmap(
+            mutable,
+            240,
+            (240f * mutable.height / mutable.width).toInt().coerceAtLeast(1),
+            true
+        )
+        FileOutputStream(thumbFile).use { out ->
+            thumb.compress(Bitmap.CompressFormat.JPEG, 80, out)
+        }
+        val updatedPage = page.copy(watermarkText = watermarkText)
+        pageDao.updatePage(updatedPage)
+        val doc = documentDao.getDocumentById(page.documentId)
+        if (doc != null) {
+            documentDao.updateDocument(doc.copy(modifiedTime = System.currentTimeMillis()))
+        }
+        updatedPage
+    }
+
+    suspend fun replacePageWithPhoto(
+        pageId: Long,
+        newPhotoPath: String
+    ): Page? = withContext(Dispatchers.IO) {
+        val page = pageDao.getPageById(pageId) ?: return@withContext null
+        val newPhotoFile = File(newPhotoPath)
+        if (!newPhotoFile.exists()) return@withContext null
+
+        val bmp = BitmapFactory.decodeFile(newPhotoPath) ?: return@withContext null
+        // Save as original photo for future re-cropping
+        val origFile = File(page.originalImagePath)
+        FileOutputStream(origFile).use { out ->
+            bmp.compress(Bitmap.CompressFormat.JPEG, 90, out)
+        }
+        // Save as processed
+        val processedFile = File(page.processedImagePath)
+        FileOutputStream(processedFile).use { out ->
+            bmp.compress(Bitmap.CompressFormat.JPEG, 92, out)
+        }
+        // Save thumbnail
+        val thumbFile = File(page.thumbnailPath)
+        val thumb = Bitmap.createScaledBitmap(
+            bmp,
+            240,
+            (240f * bmp.height / bmp.width).toInt().coerceAtLeast(1),
+            true
+        )
+        FileOutputStream(thumbFile).use { out ->
+            thumb.compress(Bitmap.CompressFormat.JPEG, 80, out)
+        }
+        val updatedPage = page.copy(cropBorderJson = "", rotationDegrees = 0)
+        pageDao.updatePage(updatedPage)
+        val doc = documentDao.getDocumentById(page.documentId)
+        if (doc != null) {
+            documentDao.updateDocument(doc.copy(modifiedTime = System.currentTimeMillis()))
+        }
+        updatedPage
+    }
+
+    suspend fun savePageToGallery(page: Page): Boolean = withContext(Dispatchers.IO) {
+        val srcFile = File(page.processedImagePath)
+        if (!srcFile.exists()) return@withContext false
+
+        val fileName = "OpenScanner_${System.currentTimeMillis()}_${page.pageIndex + 1}.jpg"
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val contentValues = ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+                    put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/OpenScanner")
+                }
+                val uri = context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues)
+                if (uri != null) {
+                    context.contentResolver.openOutputStream(uri)?.use { out ->
+                        FileInputStream(srcFile).use { input -> input.copyTo(out) }
+                    }
+                    return@withContext true
+                }
+            } else {
+                val picsDir = File(
+                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES),
+                    "OpenScanner"
+                ).apply { if (!exists()) mkdirs() }
+                val destFile = File(picsDir, fileName)
+                FileInputStream(srcFile).use { input ->
+                    FileOutputStream(destFile).use { out -> input.copyTo(out) }
+                }
+                return@withContext true
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        false
+    }
+
     suspend fun createCollagePage(
         documentId: Long,
         pageIds: List<Long>,
@@ -518,7 +693,8 @@ class ScannerRepository(
         watermarkConfig: org.openscanner.cv.CollageWatermarkConfig? = null,
         slotTransforms: Map<Int, org.openscanner.cv.SlotTransform>? = null,
         drawBorders: Boolean = false,
-        slotCustomPaths: Map<Int, String>? = null
+        slotCustomPaths: Map<Int, String>? = null,
+        customFileName: String? = null
     ): Page = withContext(Dispatchers.IO) {
         val targetSlotRects = CollageGenerator.calculateSlotRects(layout)
         val bitmaps = mutableListOf<Bitmap?>()
@@ -588,7 +764,8 @@ class ScannerRepository(
         documentId: Long,
         specs: List<CollagePageSpec>,
         watermarkConfig: org.openscanner.cv.CollageWatermarkConfig? = null,
-        drawBorders: Boolean = false
+        drawBorders: Boolean = false,
+        customFileName: String? = null
     ): List<Page> = withContext(Dispatchers.IO) {
         specs.map { spec ->
             createCollagePage(
@@ -598,7 +775,8 @@ class ScannerRepository(
                 watermarkConfig = watermarkConfig,
                 slotTransforms = spec.slotTransforms,
                 drawBorders = drawBorders,
-                slotCustomPaths = spec.slotCustomPaths
+                slotCustomPaths = spec.slotCustomPaths,
+                customFileName = customFileName
             )
         }
     }
