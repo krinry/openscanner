@@ -359,7 +359,8 @@ class ScannerRepository(
         val pfd = context.contentResolver.openFileDescriptor(uri, "r") ?: return@withContext -1L
         try {
             val pdfRenderer = android.graphics.pdf.PdfRenderer(pfd)
-            val count = pdfRenderer.pageCount
+            val maxPages = 100 // Cap maximum imported pages to prevent memory and storage exhaustion
+            val count = minOf(pdfRenderer.pageCount, maxPages)
             if (count == 0) {
                 pdfRenderer.close()
                 return@withContext -1L

@@ -35,6 +35,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.json.JSONArray
 import org.json.JSONObject
+import org.openscanner.data.security.CryptoHelper
 import org.openscanner.pdf.model.OffsetNormalized
 import org.openscanner.ui.theme.ScannerGreen
 import java.io.File
@@ -63,7 +64,13 @@ object SignatureVaultManager {
 
         val list = mutableListOf<SavedSignature>()
         try {
-            val jsonStr = file.readText()
+            val rawContent = file.readText()
+            val jsonStr = try {
+                CryptoHelper.decrypt(rawContent)
+            } catch (e: Exception) {
+                // Graceful fallback for migration of existing plaintext vaults
+                rawContent
+            }
             val arr = JSONArray(jsonStr)
             for (i in 0 until arr.length()) {
                 val obj = arr.getJSONObject(i)
@@ -166,7 +173,14 @@ object SignatureVaultManager {
                 obj.put("strokes", strokesArr)
                 arr.put(obj)
             }
-            File(getVaultDir(context), "vault.json").writeText(arr.toString())
+            val jsonString = arr.toString()
+            val payload = try {
+                CryptoHelper.encrypt(jsonString)
+            } catch (e: Exception) {
+                e.printStackTrace()
+                jsonString
+            }
+            File(getVaultDir(context), "vault.json").writeText(payload)
         } catch (e: Exception) {
             e.printStackTrace()
         }

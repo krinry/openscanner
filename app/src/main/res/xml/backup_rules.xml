@@ -4,6 +4,7 @@
     <include domain="database" path="." />
     <!-- Include internal app files (scanned documents, pages, crops) -->
     <include domain="file" path="." />
-    <!-- Include shared preferences -->
+    <!-- Include shared preferences but exclude sensitive cloud sync credentials -->
     <include domain="sharedpref" path="." />
+    <exclude domain="sharedpref" path="openscanner_cloud_sync.xml" />
 </full-backup-content>

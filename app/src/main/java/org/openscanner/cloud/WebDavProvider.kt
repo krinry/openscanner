@@ -8,6 +8,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.asRequestBody
+import org.openscanner.data.security.CryptoHelper
 import java.io.File
 import java.util.concurrent.TimeUnit
 
@@ -35,12 +36,28 @@ class WebDavProvider(private val context: Context) : CloudProvider {
             .build()
     }
 
+    private fun getStoredPassword(): String? {
+        val raw = prefs.getString(PREF_PASS, null) ?: return null
+        return try {
+            CryptoHelper.decrypt(raw)
+        } catch (e: Exception) {
+            // Graceful fallback for migration of previously stored plaintext passwords
+            raw
+        }
+    }
+
     suspend fun saveCredentials(serverUrl: String, username: String, password: String) = withContext(Dispatchers.IO) {
         val cleanUrl = if (serverUrl.endsWith("/")) serverUrl else "$serverUrl/"
+        val securePass = try {
+            CryptoHelper.encrypt(password)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            password
+        }
         prefs.edit()
             .putString(PREF_URL, cleanUrl)
             .putString(PREF_USER, username.trim())
-            .putString(PREF_PASS, password)
+            .putString(PREF_PASS, securePass)
             .putBoolean("sync_webdav", true)
             .apply()
     }
@@ -103,7 +120,7 @@ class WebDavProvider(private val context: Context) : CloudProvider {
     override suspend fun uploadFile(file: File, mimeType: String): Result<String> = withContext(Dispatchers.IO) {
         val url = prefs.getString(PREF_URL, null) ?: return@withContext Result.failure(IllegalStateException("WebDAV not configured"))
         val user = prefs.getString(PREF_USER, null) ?: return@withContext Result.failure(IllegalStateException("WebDAV username missing"))
-        val pass = prefs.getString(PREF_PASS, null) ?: return@withContext Result.failure(IllegalStateException("WebDAV password missing"))
+        val pass = getStoredPassword() ?: return@withContext Result.failure(IllegalStateException("WebDAV password missing"))
 
         try {
             val targetUrl = "$url${file.name}"
@@ -131,7 +148,7 @@ class WebDavProvider(private val context: Context) : CloudProvider {
         if (!isConnected()) return@withContext SyncResult.Error("WebDAV is not connected")
         val url = prefs.getString(PREF_URL, null) ?: return@withContext SyncResult.Error("No server URL")
         val user = prefs.getString(PREF_USER, null) ?: return@withContext SyncResult.Error("No username")
-        val pass = prefs.getString(PREF_PASS, null) ?: return@withContext SyncResult.Error("No password")
+        val pass = getStoredPassword() ?: return@withContext SyncResult.Error("No password")
 
         var count = 0
         try {

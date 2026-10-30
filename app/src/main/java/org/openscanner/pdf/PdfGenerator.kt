@@ -132,12 +132,17 @@ object PdfGenerator {
             Result.success(outputFile)
         } catch (e: Exception) {
             e.printStackTrace()
-            // Robust Native Fallback using Android OS PdfDocument
-            try {
-                generateNativePdf(pages, options, outputFile)
-                Result.success(outputFile)
-            } catch (fallbackError: Exception) {
-                Result.failure(fallbackError)
+            // Fail-closed: If password encryption was requested and failed, never fall back to unencrypted native PDF
+            if (!options.password.isNullOrBlank()) {
+                Result.failure(IllegalStateException("Failed to generate password-protected PDF: ${e.message}", e))
+            } else {
+                // Robust Native Fallback using Android OS PdfDocument for unencrypted exports
+                try {
+                    generateNativePdf(pages, options, outputFile)
+                    Result.success(outputFile)
+                } catch (fallbackError: Exception) {
+                    Result.failure(fallbackError)
+                }
             }
         }
     }

@@ -133,7 +133,8 @@ fun CameraScreen(
                                 val pfd = context.contentResolver.openFileDescriptor(uri, "r")
                                 if (pfd != null) {
                                     val pdfRenderer = PdfRenderer(pfd)
-                                    val count = pdfRenderer.pageCount
+                                    val maxPages = 100 // Cap maximum imported pages to prevent memory exhaustion
+                                    val count = minOf(pdfRenderer.pageCount, maxPages)
                                     for (i in 0 until count) {
                                         val page = pdfRenderer.openPage(i)
                                         val w = page.width * 2
