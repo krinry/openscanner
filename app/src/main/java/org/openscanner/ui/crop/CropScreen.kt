@@ -4,9 +4,11 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.graphics.RectF
+import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -42,35 +44,67 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.openscanner.OpenScannerApp
 import org.openscanner.cv.DocumentQuadrilateral
 import org.openscanner.cv.EdgeDetector
+import org.openscanner.cv.NativeScannerEngine
 import org.openscanner.cv.PointF
+import org.openscanner.data.model.Page
+import org.openscanner.data.repository.ScannerRepository
 import org.openscanner.ui.theme.ScannerGreen
 import java.io.File
+import kotlin.math.max
 
 /**
- * Production-grade Document Crop Screen adhering strictly to AGENTS.md clean-room standards.
+ * Universal Production-grade Document Crop Screen adhering strictly to AGENTS.md clean-room standards.
+ *
+ * Single Source of Truth for cropping across the entire application:
+ * 1. Post-scan / camera capture flow (routes to FilterScreen).
+ * 2. Existing Page crop flow from PageViewerScreen (saves perspective warp directly to Room DB & files).
+ * 3. Standalone quad selection with callback.
  *
  * Replicates the complete mathematical and behavioral logic of OKEN Scanner:
- * 1. 8-Handle Crop Box with 52% dark translucent background mask.
- * 2. Directional Midpoint Drag preserving perspective angles and skew.
- * 3. Dynamic HUD Loupe Evasion (Top-Left by default, flips to Top-Right near contact).
- * 4. Magnetic Snapping to image borders, 90° orthogonal alignments, and physical document edges.
- * 5. Instant invalid quad detection (turns orange-red when self-intersecting or concave).
+ * - 8-Handle Crop Box with dark translucent overlay mask.
+ * - Directional Midpoint Drag preserving perspective angles and skew.
+ * - Dynamic HUD Loupe Evasion (Top-Left by default, flips to Top-Right near contact).
+ * - Magnetic Snapping to image borders, 90° orthogonal alignments, and physical document edges.
+ * - 100% Free corner drag with 1:1 finger tracking.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CropScreen(
-    imagePath: String,
+    imagePath: String = "",
     docId: Long = -1L,
+    page: Page? = null,
     initialQuad: DocumentQuadrilateral? = null,
     rotationDegrees: Int = 0,
     onCropConfirmed: ((DocumentQuadrilateral) -> Unit)? = null,
     onNavigateToFilter: ((imagePath: String, docId: Long, borderJson: String) -> Unit)? = null,
+    onPageUpdated: (() -> Unit)? = null,
     onClose: () -> Unit
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+
+    // Determine target image file
+    val effectiveImagePath = remember(page, imagePath) {
+        if (page != null) {
+            val origFile = File(page.originalImagePath)
+            if (origFile.exists() && origFile.length() > 0) {
+                origFile.absolutePath
+            } else {
+                page.processedImagePath
+            }
+        } else {
+            imagePath
+        }
+    }
+
+    val effectiveDocId = page?.documentId ?: docId
+    val effectiveRotation = remember(page, rotationDegrees) {
+        ((page?.rotationDegrees ?: 0) + rotationDegrees) % 360
+    }
+
     var bitmap by remember { mutableStateOf<Bitmap?>(null) }
     var quad by remember { mutableStateOf<DocumentQuadrilateral?>(null) }
     var activeTouchPoint by remember { mutableStateOf<Offset?>(null) }
@@ -79,11 +113,24 @@ fun CropScreen(
     var viewHeight by remember { mutableFloatStateOf(1f) }
     var fullImageWidth by remember { mutableFloatStateOf(0f) }
     var fullImageHeight by remember { mutableFloatStateOf(0f) }
+    var isSaving by remember { mutableStateOf(false) }
 
     var zoomScale by remember { mutableFloatStateOf(1f) }
     var panOffset by remember { mutableStateOf(Offset.Zero) }
 
     val isQuadValid = quad?.isValidConvex() ?: true
+
+    // Parse initial quad from Page if available and none explicitly passed
+    val parsedInitialQuad = remember(page, initialQuad) {
+        if (initialQuad != null) {
+            initialQuad
+        } else if (page != null && page.cropBorderJson.isNotBlank()) {
+            val parts = page.cropBorderJson.split(",").mapNotNull { it.toFloatOrNull() }
+            if (parts.size >= 8) {
+                DocumentQuadrilateral.fromFloatArray(parts.toFloatArray())
+            } else null
+        } else null
+    }
 
     fun updateTransform(zoomChange: Float, panChange: Offset) {
         val newZoom = (zoomScale * zoomChange).coerceIn(1f, 4.5f)
@@ -175,9 +222,9 @@ fun CropScreen(
     }
 
     // Decode sample bitmap for high performance rendering
-    LaunchedEffect(imagePath, rotationDegrees) {
+    LaunchedEffect(effectiveImagePath, effectiveRotation) {
         withContext(Dispatchers.IO) {
-            val file = File(imagePath)
+            val file = File(effectiveImagePath)
             if (file.exists()) {
                 var exifDegrees = 0
                 try {
@@ -191,7 +238,7 @@ fun CropScreen(
                     }
                 } catch (_: Exception) { }
 
-                val totalRotation = (rotationDegrees + exifDegrees) % 360
+                val totalRotation = (effectiveRotation + exifDegrees) % 360
 
                 val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
                 BitmapFactory.decodeFile(file.absolutePath, opts)
@@ -222,7 +269,7 @@ fun CropScreen(
     fun proceedToNext() {
         val q = quad ?: return
         if (!q.isValidConvex()) {
-            android.widget.Toast.makeText(context, "Invalid boundary geometry", android.widget.Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "Invalid boundary geometry", Toast.LENGTH_SHORT).show()
             return
         }
         val bmp = bitmap ?: return
@@ -231,7 +278,6 @@ fun CropScreen(
         val renderH = fitRect.height()
         if (renderW <= 0f || renderH <= 0f) return
 
-        // Map coordinates back to original full-resolution image
         val origW = if (fullImageWidth > 0f) fullImageWidth else bmp.width.toFloat()
         val origH = if (fullImageHeight > 0f) fullImageHeight else bmp.height.toFloat()
 
@@ -248,23 +294,80 @@ fun CropScreen(
             bottomLeft = mapPoint(q.bottomLeft)
         )
 
-        if (onCropConfirmed != null) {
+        val borderStr = "${realQuad.topLeft.x},${realQuad.topLeft.y}," +
+                "${realQuad.topRight.x},${realQuad.topRight.y}," +
+                "${realQuad.bottomRight.x},${realQuad.bottomRight.y}," +
+                "${realQuad.bottomLeft.x},${realQuad.bottomLeft.y}"
+
+        if (page != null) {
+            // Existing page workflow: warp, apply existing enhancements, update Room DB & file
+            isSaving = true
+            coroutineScope.launch(Dispatchers.IO) {
+                try {
+                    val rawFile = File(effectiveImagePath)
+                    val origBmp = BitmapFactory.decodeFile(rawFile.absolutePath) ?: bmp
+                    val topW = realQuad.topLeft.distanceTo(realQuad.topRight)
+                    val botW = realQuad.bottomLeft.distanceTo(realQuad.bottomRight)
+                    val leftH = realQuad.topLeft.distanceTo(realQuad.bottomLeft)
+                    val rightH = realQuad.topRight.distanceTo(realQuad.bottomRight)
+                    val targetW = max(topW, botW).toInt().coerceAtLeast(300)
+                    val targetH = max(leftH, rightH).toInt().coerceAtLeast(400)
+
+                    val warped = NativeScannerEngine.warpDocument(origBmp, realQuad, targetW, targetH)
+                    if (page.enhanceMode != 0) {
+                        NativeScannerEngine.applyEnhancement(warped, page.enhanceMode)
+                    }
+                    if (page.brightness != 0 || page.contrast != 0) {
+                        NativeScannerEngine.adjustBrightnessContrast(warped, page.brightness, page.contrast)
+                    }
+
+                    val app = context.applicationContext as OpenScannerApp
+                    val repo = ScannerRepository(
+                        context = context,
+                        documentDao = app.database.documentDao(),
+                        pageDao = app.database.pageDao(),
+                        folderDao = app.database.folderDao()
+                    )
+
+                    repo.updatePageBitmap(
+                        pageId = page.id,
+                        newBitmap = warped,
+                        cropBorderJson = borderStr
+                    )
+
+                    withContext(Dispatchers.Main) {
+                        isSaving = false
+                        Toast.makeText(context, "Page cropped successfully!", Toast.LENGTH_SHORT).show()
+                        onPageUpdated?.invoke()
+                        onClose()
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                    withContext(Dispatchers.Main) {
+                        isSaving = false
+                        Toast.makeText(context, "Failed to crop page: ${e.message}", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+        } else if (onCropConfirmed != null) {
             onCropConfirmed(realQuad)
             onClose()
         } else if (onNavigateToFilter != null) {
-            val borderStr = "${realQuad.topLeft.x},${realQuad.topLeft.y}," +
-                    "${realQuad.topRight.x},${realQuad.topRight.y}," +
-                    "${realQuad.bottomRight.x},${realQuad.bottomRight.y}," +
-                    "${realQuad.bottomLeft.x},${realQuad.bottomLeft.y}"
-
-            onNavigateToFilter(imagePath, docId, borderStr)
+            onNavigateToFilter(effectiveImagePath, effectiveDocId, borderStr)
         }
     }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Crop Document", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp) },
+                title = {
+                    Text(
+                        text = if (page != null) "Crop Page" else "Crop Document",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 18.sp
+                    )
+                },
                 navigationIcon = {
                     IconButton(onClick = onClose) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
@@ -273,7 +376,7 @@ fun CropScreen(
                 actions = {
                     Button(
                         onClick = { proceedToNext() },
-                        enabled = isQuadValid,
+                        enabled = isQuadValid && !isSaving,
                         colors = ButtonDefaults.buttonColors(
                             containerColor = ScannerGreen,
                             disabledContainerColor = Color.DarkGray
@@ -281,9 +384,22 @@ fun CropScreen(
                         shape = RoundedCornerShape(18.dp),
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp)
                     ) {
-                        Text("Next", color = Color.White, fontWeight = FontWeight.Bold)
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+                        if (isSaving) {
+                            CircularProgressIndicator(color = Color.White, modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        } else {
+                            Text(
+                                text = if (page != null) "Save" else "Next",
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Icon(
+                                imageVector = if (page != null) Icons.Default.Check else Icons.AutoMirrored.Filled.ArrowForward,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Black)
@@ -367,22 +483,26 @@ fun CropScreen(
                         }
                     )
 
-                    // Signature OKEN Emerald Green Circular Process Button
+                    // Process Button
                     Box(
                         modifier = Modifier
                             .size(50.dp)
                             .shadow(6.dp, CircleShape)
                             .clip(CircleShape)
-                            .background(if (isQuadValid) ScannerGreen else Color.DarkGray)
-                            .clickable(enabled = isQuadValid) { proceedToNext() },
+                            .background(if (isQuadValid && !isSaving) ScannerGreen else Color.DarkGray)
+                            .clickable(enabled = isQuadValid && !isSaving) { proceedToNext() },
                         contentAlignment = Alignment.Center
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Check,
-                            contentDescription = "Confirm Crop",
-                            tint = Color.White,
-                            modifier = Modifier.size(26.dp)
-                        )
+                        if (isSaving) {
+                            CircularProgressIndicator(color = Color.White, modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
+                        } else {
+                            Icon(
+                                imageVector = if (page != null) Icons.Default.Check else Icons.Default.Check,
+                                contentDescription = "Confirm Crop",
+                                tint = Color.White,
+                                modifier = Modifier.size(26.dp)
+                            )
+                        }
                     }
                 }
             }
@@ -404,8 +524,8 @@ fun CropScreen(
                             viewHeight = coordinates.size.height.toFloat()
                             if (quad == null) {
                                 val r = calculateImageFit(viewWidth, viewHeight, bmp.width, bmp.height)
-                                if (initialQuad != null) {
-                                    quad = mapInitialQuadToScreen(initialQuad, r, fullImageWidth, fullImageHeight)
+                                if (parsedInitialQuad != null) {
+                                    quad = mapInitialQuadToScreen(parsedInitialQuad, r, fullImageWidth, fullImageHeight)
                                 } else {
                                     autoDetectCorners(bmp, r)
                                 }
@@ -455,7 +575,7 @@ fun CropScreen(
                         Surface(
                             shape = RoundedCornerShape(16.dp),
                             color = Color.Black.copy(alpha = 0.75f),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, ScannerGreen),
+                            border = BorderStroke(1.dp, ScannerGreen),
                             modifier = Modifier
                                 .align(Alignment.TopEnd)
                                 .padding(16.dp)
@@ -484,7 +604,7 @@ fun CropScreen(
                         }
                     }
 
-                    // OKEN-Style HUD Magnifier Loupe (shown outside graphicsLayer to stay at fixed crisp screen scale)
+                    // OKEN-Style HUD Magnifier Loupe
                     val fitRect = calculateImageFit(viewWidth, viewHeight, bmp.width, bmp.height)
                     quad?.let { _ ->
                         AnimatedVisibility(
