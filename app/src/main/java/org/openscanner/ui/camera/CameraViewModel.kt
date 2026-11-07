@@ -131,7 +131,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
         consecutiveMissingFrames = 0
 
-        // Document size proximity check (matches OKEN Scanner closer check)
+        // Document size proximity check
         val minX = minOf(quad.topLeft.x, quad.bottomLeft.x)
         val maxX = maxOf(quad.topRight.x, quad.bottomRight.x)
         val minY = minOf(quad.topLeft.y, quad.topRight.y)

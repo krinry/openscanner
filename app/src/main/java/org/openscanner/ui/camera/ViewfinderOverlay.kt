@@ -47,7 +47,7 @@ fun ViewfinderOverlay(
 ) {
     Box(modifier = modifier.fillMaxSize()) {
         Canvas(modifier = Modifier.fillMaxSize()) {
-            // Horizon Leveler Reticle (OKEN Scanner SensorView clean-room implementation)
+            // Horizon Leveler Reticle
             if (levelerState.isVisible) {
                 val center = Offset(size.width / 2f, size.height / 2f)
                 val reticleRadius = 24.dp.toPx()

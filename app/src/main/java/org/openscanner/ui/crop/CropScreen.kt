@@ -63,7 +63,7 @@ import kotlin.math.max
  * 2. Existing Page crop flow from PageViewerScreen (saves perspective warp directly to Room DB & files).
  * 3. Standalone quad selection with callback.
  *
- * Replicates the complete mathematical and behavioral logic of OKEN Scanner:
+ * Features:
  * - 8-Handle Crop Box with dark translucent overlay mask.
  * - Directional Midpoint Drag preserving perspective angles and skew.
  * - Dynamic HUD Loupe Evasion (Top-Left by default, flips to Top-Right near contact).
@@ -604,7 +604,7 @@ fun CropScreen(
                         }
                     }
 
-                    // OKEN-Style HUD Magnifier Loupe
+                    // Floating HUD Magnifier Loupe
                     val fitRect = calculateImageFit(viewWidth, viewHeight, bmp.width, bmp.height)
                     quad?.let { _ ->
                         AnimatedVisibility(

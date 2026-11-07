@@ -27,10 +27,10 @@ import kotlin.math.hypot
 /**
  * 100% Free, buttery smooth 8-handle Crop Quadrilateral Overlay.
  *
- * Faithfully copies OKEN Scanner's ImageEditView & HightlightRegion interaction logic:
+ * Interaction logic:
  * - Corner drag is 100% FREE with 1:1 finger tracking and zero artificial resistance.
- * - Midpoint drag translates both adjacent edge vertices together (OKEN mode 2: o(dx, dy)).
- * - Center drag pans the entire quad (OKEN mode 3: m(dx, dy)).
+ * - Midpoint drag translates both adjacent edge vertices together.
+ * - Center drag pans the entire quad.
  * - Outside area is dimmed with 52% translucent dark mask.
  * - Zero allocations on draw path for continuous 120 FPS performance.
  */
@@ -77,7 +77,7 @@ fun DraggablePolygonOverlay(
                     val midLeft = Offset((p4.x + p1.x) / 2f, (p4.y + p1.y) / 2f)
 
                     val handles = listOf(p1, p2, p3, p4, midTop, midRight, midBottom, midLeft)
-                    // Generous touch hitbox: 48dp radius (matching OKEN Scanner's 100px hitbox)
+                    // Generous touch hitbox: 48dp radius
                     val touchRadius = 48.dp.toPx() / currentZoomScale.coerceAtLeast(1f)
 
                     // Find closest handle within touch hitbox
@@ -95,7 +95,7 @@ fun DraggablePolygonOverlay(
                         activeHandleIndex = selectedHandle
                         currentOnHandleActive(handles[selectedHandle], down.position)
                     } else {
-                        // Check if touch is inside polygon body (OKEN Mode 3: Body Pan)
+                        // Check if touch is inside polygon body (Mode 3: Body Pan)
                         val poly = listOf(p1, p2, p3, p4)
                         var inside = false
                         var j = poly.size - 1
@@ -168,7 +168,7 @@ fun DraggablePolygonOverlay(
                                     return PointF(cx, cy)
                                 }
 
-                                // 100% Direct & Free movement: Exactly like OKEN Scanner
+                                // Direct & Free movement
                                 val newQuad = when (activeHandleIndex) {
                                     // Mode 1: Corner Drag (100% free tracking)
                                     0 -> curQ.copy(topLeft = clampPt(curQ.topLeft.x + dx, curQ.topLeft.y + dy))
@@ -176,7 +176,7 @@ fun DraggablePolygonOverlay(
                                     2 -> curQ.copy(bottomRight = clampPt(curQ.bottomRight.x + dx, curQ.bottomRight.y + dy))
                                     3 -> curQ.copy(bottomLeft = clampPt(curQ.bottomLeft.x + dx, curQ.bottomLeft.y + dy))
 
-                                    // Mode 2: Edge Midpoint Drag (OKEN o(dx, dy) - translates both edge endpoints)
+                                    // Mode 2: Edge Midpoint Drag (translates both edge endpoints)
                                     4 -> { // Top Edge: moves both TL and TR
                                         curQ.copy(
                                             topLeft = clampPt(curQ.topLeft.x + dx, curQ.topLeft.y + dy),
@@ -202,7 +202,7 @@ fun DraggablePolygonOverlay(
                                         )
                                     }
 
-                                    // Mode 3: Whole body translation (OKEN m(dx, dy))
+                                    // Mode 3: Whole body translation
                                     8 -> {
                                         val minX = minOf(curQ.topLeft.x, curQ.topRight.x, curQ.bottomRight.x, curQ.bottomLeft.x)
                                         val maxX = maxOf(curQ.topLeft.x, curQ.topRight.x, curQ.bottomRight.x, curQ.bottomLeft.x)

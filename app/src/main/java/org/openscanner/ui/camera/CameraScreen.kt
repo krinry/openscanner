@@ -236,7 +236,7 @@ fun CameraScreen(
     var idCardFrontBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var viewLayoutSize by remember { mutableStateOf(IntSize.Zero) }
 
-    // Clean-room Horizon Leveler (OKEN Scanner SensorUtil/SensorView equivalent)
+    // Real-time Horizon Leveler using accelerometer tilt physics
     val leveler = remember { org.openscanner.camera.CameraLeveler(context) }
     val levelerState by leveler.levelerState.collectAsState()
 
@@ -836,7 +836,7 @@ fun CameraScreen(
                 }
             }
 
-            // Single vs Batch Mode Switcher (OKEN Scanner NORMAL_SINGLE vs NORMAL_MULTI clean-room UI)
+            // Single vs Batch Mode Switcher
             if (currentMode == CaptureMode.DOCUMENT) {
                 Surface(
                     shape = RoundedCornerShape(14.dp),

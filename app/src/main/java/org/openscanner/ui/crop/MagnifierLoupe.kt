@@ -33,7 +33,7 @@ import kotlin.math.roundToInt
 /**
  * High-performance HUD Magnifier Loupe (Zoom Preview) for document crop handles.
  *
- * Implements OKEN Scanner's exact HUD corner evasion logic:
+ * HUD corner evasion logic:
  * - Parked in Top-Left by default.
  * - Flips smoothly to Top-Right when the touch/vertex is within 3 * radius of Top-Left.
  * - Hand/fingers NEVER occlude the magnified view.
@@ -63,7 +63,7 @@ fun MagnifierLoupe(
     val radiusPx = loupeSizePx / 2f
     val marginPx = with(density) { 16.dp.toPx() }
 
-    // Evasion threshold: 3 * radius from top-left (OKEN Scanner b(x, y) formula)
+    // Evasion threshold: 3 * radius from top-left
     val evasionThresholdX = 3f * radiusPx + marginPx
     val evasionThresholdY = 3f * radiusPx + marginPx
 
