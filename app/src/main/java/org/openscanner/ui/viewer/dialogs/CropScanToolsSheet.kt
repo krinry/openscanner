@@ -81,7 +81,6 @@ fun CropScanToolsSheet(
     var quad by remember { mutableStateOf<DocumentQuadrilateral?>(null) }
     var activeTouchPoint by remember { mutableStateOf<Offset?>(null) }
     var activeHandlePoint by remember { mutableStateOf<Offset?>(null) }
-    var isCropHandleSnapped by remember { mutableStateOf(false) }
     var viewWidth by remember { mutableFloatStateOf(1f) }
     var viewHeight by remember { mutableFloatStateOf(1f) }
 
@@ -435,23 +434,22 @@ fun CropScanToolsSheet(
                                     quad = q,
                                     boundsRect = fitRect,
                                     onQuadChanged = { updatedQuad -> quad = updatedQuad },
-                                    onTouchPoint = { pt -> activeTouchPoint = pt },
-                                    onHandleActive = { handlePt, touchPt, snapped ->
+                                    onHandleActive = { handlePt, touchPt ->
                                         activeHandlePoint = handlePt
                                         activeTouchPoint = touchPt
-                                        isCropHandleSnapped = snapped
                                     }
                                 )
 
                                 val imgScale = if (bmp.width > 0) fitRect.width() / bmp.width.toFloat() else 1f
-                                MagnifierLoupe(
-                                    bitmap = bmp,
-                                    touchPoint = activeTouchPoint,
-                                    imageScale = imgScale,
-                                    fitRect = fitRect,
-                                    handlePoint = activeHandlePoint,
-                                    isSnapped = isCropHandleSnapped
-                                )
+                                if (activeHandlePoint != null) {
+                                    MagnifierLoupe(
+                                        bitmap = bmp,
+                                        touchPoint = activeTouchPoint,
+                                        imageScale = imgScale,
+                                        fitRect = fitRect,
+                                        handlePoint = activeHandlePoint
+                                    )
+                                }
                             }
                         } ?: CircularProgressIndicator(color = ScannerGreen)
                     } else {

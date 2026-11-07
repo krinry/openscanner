@@ -75,7 +75,6 @@ fun CropScreen(
     var quad by remember { mutableStateOf<DocumentQuadrilateral?>(null) }
     var activeTouchPoint by remember { mutableStateOf<Offset?>(null) }
     var activeHandlePoint by remember { mutableStateOf<Offset?>(null) }
-    var isCropHandleSnapped by remember { mutableStateOf(false) }
     var viewWidth by remember { mutableFloatStateOf(1f) }
     var viewHeight by remember { mutableFloatStateOf(1f) }
     var fullImageWidth by remember { mutableFloatStateOf(0f) }
@@ -439,37 +438,13 @@ fun CropScreen(
                                 quad = currentQuad,
                                 boundsRect = fitRect,
                                 onQuadChanged = { quad = it },
-                                onTouchPoint = { activeTouchPoint = it },
-                                onHandleActive = { hPt, tPt, snapped ->
+                                onHandleActive = { hPt, tPt ->
                                     activeHandlePoint = hPt
                                     activeTouchPoint = tPt
-                                    isCropHandleSnapped = snapped
                                 },
                                 zoomScale = zoomScale,
                                 onTransform = { zRatio, pDelta ->
                                     updateTransform(zRatio, pDelta)
-                                },
-                                onSnapPoint = { rawPoint, searchRadiusPx ->
-                                    if (fitRect.width() > 0f && fitRect.height() > 0f && bmp.width > 0 && bmp.height > 0) {
-                                        val scaleBmpX = bmp.width.toFloat() / fitRect.width()
-                                        val scaleBmpY = bmp.height.toFloat() / fitRect.height()
-                                        val bmpX = (rawPoint.x - fitRect.left) * scaleBmpX
-                                        val bmpY = (rawPoint.y - fitRect.top) * scaleBmpY
-                                        val bmpRadius = searchRadiusPx * maxOf(scaleBmpX, scaleBmpY)
-
-                                        val (snappedBmpPt, didSnap) = org.openscanner.cv.NativeScannerEngine.snapPointToNearestEdge(
-                                            bmp, bmpX, bmpY, bmpRadius
-                                        )
-                                        if (didSnap) {
-                                            val screenX = fitRect.left + (snappedBmpPt.x / scaleBmpX)
-                                            val screenY = fitRect.top + (snappedBmpPt.y / scaleBmpY)
-                                            Pair(PointF(screenX, screenY), true)
-                                        } else {
-                                            Pair(rawPoint, false)
-                                        }
-                                    } else {
-                                        Pair(rawPoint, false)
-                                    }
                                 }
                             )
                         }
@@ -513,7 +488,7 @@ fun CropScreen(
                     val fitRect = calculateImageFit(viewWidth, viewHeight, bmp.width, bmp.height)
                     quad?.let { _ ->
                         AnimatedVisibility(
-                            visible = activeTouchPoint != null || activeHandlePoint != null,
+                            visible = activeHandlePoint != null,
                             enter = fadeIn(),
                             exit = fadeOut()
                         ) {
@@ -522,8 +497,7 @@ fun CropScreen(
                                 touchPoint = activeTouchPoint,
                                 handlePoint = activeHandlePoint,
                                 imageScale = fitRect.width() / bmp.width.toFloat(),
-                                fitRect = fitRect,
-                                isSnapped = isCropHandleSnapped
+                                fitRect = fitRect
                             )
                         }
                     }
