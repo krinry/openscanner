@@ -5,6 +5,8 @@ import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Matrix
 import android.graphics.Paint
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
 import android.graphics.RectF
 import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
@@ -12,6 +14,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
@@ -32,8 +36,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -55,7 +62,11 @@ import org.openscanner.ui.theme.ScannerGreen
 import java.io.File
 
 private enum class EditToolMode {
-    PEN, HIGHLIGHTER, TEXT, REDACT, TUNE
+    PEN, HIGHLIGHTER, SMUDGE, TEXT, REDACT, TUNE
+}
+
+private enum class SmudgeShape {
+    ROUND, RECTANGLE, ERASER
 }
 
 private data class ImageDoodlePath(
@@ -63,7 +74,10 @@ private data class ImageDoodlePath(
     val color: Color,
     val strokeWidth: Float,
     val isHighlighter: Boolean = false,
-    val isRedact: Boolean = false
+    val isRedact: Boolean = false,
+    val isSmudge: Boolean = false,
+    val isSmudgeRect: Boolean = false,
+    val isEraser: Boolean = false
 )
 
 private data class ImageTextAnnotation(
@@ -84,9 +98,27 @@ fun ImageEditStudioSheet(
     val coroutineScope = rememberCoroutineScope()
 
     var activeTool by remember { mutableStateOf(EditToolMode.PEN) }
-    var selectedColor by remember { mutableStateOf(Color(0xFFE53935)) } // Default red
+    var selectedColor by remember { mutableStateOf(Color(0xFFE53935)) } // Default red for pen
     var strokeWidth by remember { mutableFloatStateOf(6f) }
     var highlighterWidth by remember { mutableFloatStateOf(24f) }
+
+    // Smudge tool state
+    var smudgeShape by remember { mutableStateOf(SmudgeShape.ROUND) }
+    var smudgeColor by remember { mutableStateOf(Color.White) }
+    var smudgeWidth by remember { mutableFloatStateOf(24f) }
+    var isEyedropperActive by remember { mutableStateOf(false) }
+    var eyedropperPosition by remember { mutableStateOf(Offset.Zero) }
+    var sampledDropperColor by remember { mutableStateOf(Color.White) }
+    val smudgeColorsList = remember {
+        mutableStateListOf(
+            Color(0xFFFFFFFF), // Pure White
+            Color(0xFFF9F9FB), // Clean Paper White
+            Color(0xFFF6F3E7), // Warm Ivory
+            Color(0xFFEFE6D5), // Manila / Cream
+            Color(0xFFD6D6D6), // Light Gray
+            Color(0xFF333333)  // Dark Charcoal
+        )
+    }
 
     // Tuning parameters
     var brightness by remember { mutableIntStateOf(0) }
@@ -144,6 +176,19 @@ fun ImageEditStudioSheet(
         }
     }
 
+    fun sampleColorAt(pos: Offset) {
+        val bmp = baseBitmap ?: return
+        val fitRect = calculateImageFit(viewWidth, viewHeight, bmp.width, bmp.height)
+        if (fitRect.width() > 0f && fitRect.height() > 0f) {
+            val normX = ((pos.x - fitRect.left) / fitRect.width()).coerceIn(0f, 1f)
+            val normY = ((pos.y - fitRect.top) / fitRect.height()).coerceIn(0f, 1f)
+            val bmpX = (normX * (bmp.width - 1)).toInt().coerceIn(0, bmp.width - 1)
+            val bmpY = (normY * (bmp.height - 1)).toInt().coerceIn(0, bmp.height - 1)
+            val pixel = bmp.getPixel(bmpX, bmpY)
+            sampledDropperColor = Color(pixel)
+        }
+    }
+
     val paletteColors = listOf(
         Color(0xFFE53935), // Red
         Color(0xFF1E88E5), // Blue
@@ -167,34 +212,56 @@ fun ImageEditStudioSheet(
                 val scaleX = if (fitRect.width() > 0) base.width.toFloat() / fitRect.width() else 1f
                 val scaleY = if (fitRect.height() > 0) base.height.toFloat() / fitRect.height() else 1f
 
-                // Draw all doodle strokes onto fullMutable
+                // Separate overlay bitmap to allow eraser to punch through doodle strokes
+                val overlayBitmap = Bitmap.createBitmap(base.width, base.height, Bitmap.Config.ARGB_8888)
+                val overlayCanvas = Canvas(overlayBitmap)
+
+                // Draw all doodle strokes onto overlayCanvas
                 for (p in paths) {
                     val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                         strokeCap = Paint.Cap.ROUND
                         strokeJoin = Paint.Join.ROUND
-                        if (p.isRedact) {
-                            style = Paint.Style.FILL
-                            color = android.graphics.Color.BLACK
-                        } else if (p.isHighlighter) {
-                            style = Paint.Style.STROKE
-                            color = p.color.toArgb()
-                            alpha = 90
-                            strokeWidth = p.strokeWidth * scaleX
-                        } else {
-                            style = Paint.Style.STROKE
-                            color = p.color.toArgb()
-                            strokeWidth = p.strokeWidth * scaleX
+                        when {
+                            p.isEraser -> {
+                                xfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR)
+                                style = Paint.Style.STROKE
+                                strokeWidth = p.strokeWidth * scaleX
+                            }
+                            p.isRedact -> {
+                                style = Paint.Style.FILL
+                                color = android.graphics.Color.BLACK
+                            }
+                            p.isSmudge && p.isSmudgeRect -> {
+                                style = Paint.Style.FILL
+                                color = p.color.toArgb()
+                            }
+                            p.isSmudge -> {
+                                style = Paint.Style.STROKE
+                                color = p.color.toArgb()
+                                strokeWidth = p.strokeWidth * scaleX
+                            }
+                            p.isHighlighter -> {
+                                style = Paint.Style.STROKE
+                                color = p.color.toArgb()
+                                alpha = 90
+                                strokeWidth = p.strokeWidth * scaleX
+                            }
+                            else -> {
+                                style = Paint.Style.STROKE
+                                color = p.color.toArgb()
+                                strokeWidth = p.strokeWidth * scaleX
+                            }
                         }
                     }
 
-                    if (p.isRedact && p.points.size >= 2) {
+                    if ((p.isRedact || (p.isSmudge && p.isSmudgeRect)) && p.points.size >= 2) {
                         val first = p.points.first()
                         val last = p.points.last()
                         val left = (minOf(first.x, last.x) - fitRect.left) * scaleX
                         val top = (minOf(first.y, last.y) - fitRect.top) * scaleY
                         val right = (maxOf(first.x, last.x) - fitRect.left) * scaleX
                         val bottom = (maxOf(first.y, last.y) - fitRect.top) * scaleY
-                        canvas.drawRect(left, top, right, bottom, paint)
+                        overlayCanvas.drawRect(left, top, right, bottom, paint)
                     } else if (p.points.size > 1) {
                         val androidPath = android.graphics.Path()
                         val start = p.points.first()
@@ -203,9 +270,13 @@ fun ImageEditStudioSheet(
                             val pt = p.points[i]
                             androidPath.lineTo((pt.x - fitRect.left) * scaleX, (pt.y - fitRect.top) * scaleY)
                         }
-                        canvas.drawPath(androidPath, paint)
+                        overlayCanvas.drawPath(androidPath, paint)
                     }
                 }
+
+                // Composite overlay onto base
+                canvas.drawBitmap(overlayBitmap, 0f, 0f, null)
+                overlayBitmap.recycle()
 
                 // Draw text annotations
                 for (t in textAnnotations) {
@@ -342,8 +413,23 @@ fun ImageEditStudioSheet(
                             viewWidth = coordinates.size.width.toFloat()
                             viewHeight = coordinates.size.height.toFloat()
                         }
-                        .pointerInput(activeTool, selectedColor, strokeWidth, highlighterWidth) {
-                            if (activeTool == EditToolMode.TEXT) {
+                        .pointerInput(activeTool, smudgeShape, isEyedropperActive, selectedColor, smudgeColor, strokeWidth, highlighterWidth, smudgeWidth) {
+                            if (isEyedropperActive) {
+                                awaitEachGesture {
+                                    val down = awaitFirstDown()
+                                    eyedropperPosition = down.position
+                                    sampleColorAt(down.position)
+                                    do {
+                                        val event = awaitPointerEvent()
+                                        val change = event.changes.firstOrNull() ?: break
+                                        if (change.pressed) {
+                                            eyedropperPosition = change.position
+                                            sampleColorAt(change.position)
+                                            change.consume()
+                                        }
+                                    } while (event.changes.any { it.pressed })
+                                }
+                            } else if (activeTool == EditToolMode.TEXT) {
                                 detectTapGestures { offset ->
                                     val bmp = baseBitmap ?: return@detectTapGestures
                                     val fitRect = calculateImageFit(viewWidth, viewHeight, bmp.width, bmp.height)
@@ -354,7 +440,10 @@ fun ImageEditStudioSheet(
                                         showTextInputDialog = true
                                     }
                                 }
-                            } else if (activeTool == EditToolMode.PEN || activeTool == EditToolMode.HIGHLIGHTER || activeTool == EditToolMode.REDACT) {
+                            } else if (activeTool == EditToolMode.PEN ||
+                                       activeTool == EditToolMode.HIGHLIGHTER ||
+                                       activeTool == EditToolMode.REDACT ||
+                                       activeTool == EditToolMode.SMUDGE) {
                                 detectDragGestures(
                                     onDragStart = { offset ->
                                         currentDrawingPoints = listOf(offset)
@@ -365,15 +454,65 @@ fun ImageEditStudioSheet(
                                     },
                                     onDragEnd = {
                                         if (currentDrawingPoints.isNotEmpty()) {
-                                            paths.add(
-                                                ImageDoodlePath(
-                                                    points = currentDrawingPoints,
-                                                    color = selectedColor,
-                                                    strokeWidth = if (activeTool == EditToolMode.HIGHLIGHTER) highlighterWidth else strokeWidth,
-                                                    isHighlighter = activeTool == EditToolMode.HIGHLIGHTER,
-                                                    isRedact = activeTool == EditToolMode.REDACT
-                                                )
-                                            )
+                                            val newPath = when (activeTool) {
+                                                EditToolMode.SMUDGE -> {
+                                                    when (smudgeShape) {
+                                                        SmudgeShape.RECTANGLE -> {
+                                                            val start = currentDrawingPoints.first()
+                                                            val end = currentDrawingPoints.last()
+                                                            ImageDoodlePath(
+                                                                points = listOf(start, end),
+                                                                color = smudgeColor,
+                                                                strokeWidth = 0f,
+                                                                isSmudge = true,
+                                                                isSmudgeRect = true
+                                                            )
+                                                        }
+                                                        SmudgeShape.ERASER -> {
+                                                            ImageDoodlePath(
+                                                                points = currentDrawingPoints,
+                                                                color = Color.Transparent,
+                                                                strokeWidth = smudgeWidth,
+                                                                isSmudge = true,
+                                                                isEraser = true
+                                                            )
+                                                        }
+                                                        SmudgeShape.ROUND -> {
+                                                            ImageDoodlePath(
+                                                                points = currentDrawingPoints,
+                                                                color = smudgeColor,
+                                                                strokeWidth = smudgeWidth,
+                                                                isSmudge = true,
+                                                                isSmudgeRect = false
+                                                            )
+                                                        }
+                                                    }
+                                                }
+                                                EditToolMode.HIGHLIGHTER -> {
+                                                    ImageDoodlePath(
+                                                        points = currentDrawingPoints,
+                                                        color = selectedColor,
+                                                        strokeWidth = highlighterWidth,
+                                                        isHighlighter = true
+                                                    )
+                                                }
+                                                EditToolMode.REDACT -> {
+                                                    ImageDoodlePath(
+                                                        points = currentDrawingPoints,
+                                                        color = Color.Black,
+                                                        strokeWidth = 0f,
+                                                        isRedact = true
+                                                    )
+                                                }
+                                                else -> { // PEN
+                                                    ImageDoodlePath(
+                                                        points = currentDrawingPoints,
+                                                        color = selectedColor,
+                                                        strokeWidth = strokeWidth
+                                                    )
+                                                }
+                                            }
+                                            paths.add(newPath)
                                             undonePaths.clear()
                                             currentDrawingPoints = emptyList()
                                         }
@@ -397,66 +536,286 @@ fun ImageEditStudioSheet(
                         )
 
                         // Render Canvas Overlay for Strokes and Text
-                        androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
+                        androidx.compose.foundation.Canvas(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen)
+                        ) {
                             // Draw committed paths
                             for (p in paths) {
-                                if (p.isRedact && p.points.size >= 2) {
-                                    val first = p.points.first()
-                                    val last = p.points.last()
-                                    drawRect(
-                                        color = Color.Black,
-                                        topLeft = Offset(minOf(first.x, last.x), minOf(first.y, last.y)),
-                                        size = androidx.compose.ui.geometry.Size(
-                                            kotlin.math.abs(last.x - first.x),
-                                            kotlin.math.abs(last.y - first.y)
-                                        )
-                                    )
-                                } else if (p.points.size > 1) {
-                                    val drawPath = androidx.compose.ui.graphics.Path()
-                                    drawPath.moveTo(p.points.first().x, p.points.first().y)
-                                    for (i in 1 until p.points.size) {
-                                        drawPath.lineTo(p.points[i].x, p.points[i].y)
+                                when {
+                                    p.isEraser -> {
+                                        if (p.points.size > 1) {
+                                            val drawPath = androidx.compose.ui.graphics.Path()
+                                            drawPath.moveTo(p.points.first().x, p.points.first().y)
+                                            for (i in 1 until p.points.size) {
+                                                drawPath.lineTo(p.points[i].x, p.points[i].y)
+                                            }
+                                            drawPath(
+                                                path = drawPath,
+                                                color = Color.Transparent,
+                                                blendMode = BlendMode.Clear,
+                                                style = androidx.compose.ui.graphics.drawscope.Stroke(
+                                                    width = p.strokeWidth,
+                                                    cap = androidx.compose.ui.graphics.StrokeCap.Round,
+                                                    join = androidx.compose.ui.graphics.StrokeJoin.Round
+                                                )
+                                            )
+                                        }
                                     }
-                                    drawPath(
-                                        path = drawPath,
-                                        color = if (p.isHighlighter) p.color.copy(alpha = 0.35f) else p.color,
-                                        style = androidx.compose.ui.graphics.drawscope.Stroke(
-                                            width = p.strokeWidth,
-                                            cap = androidx.compose.ui.graphics.StrokeCap.Round,
-                                            join = androidx.compose.ui.graphics.StrokeJoin.Round
-                                        )
-                                    )
+                                    p.isSmudge && p.isSmudgeRect -> {
+                                        if (p.points.size >= 2) {
+                                            val first = p.points.first()
+                                            val last = p.points.last()
+                                            drawRect(
+                                                color = p.color,
+                                                topLeft = Offset(minOf(first.x, last.x), minOf(first.y, last.y)),
+                                                size = androidx.compose.ui.geometry.Size(
+                                                    kotlin.math.abs(last.x - first.x),
+                                                    kotlin.math.abs(last.y - first.y)
+                                                )
+                                            )
+                                        }
+                                    }
+                                    p.isSmudge -> {
+                                        if (p.points.size > 1) {
+                                            val drawPath = androidx.compose.ui.graphics.Path()
+                                            drawPath.moveTo(p.points.first().x, p.points.first().y)
+                                            for (i in 1 until p.points.size) {
+                                                drawPath.lineTo(p.points[i].x, p.points[i].y)
+                                            }
+                                            drawPath(
+                                                path = drawPath,
+                                                color = p.color,
+                                                style = androidx.compose.ui.graphics.drawscope.Stroke(
+                                                    width = p.strokeWidth,
+                                                    cap = androidx.compose.ui.graphics.StrokeCap.Round,
+                                                    join = androidx.compose.ui.graphics.StrokeJoin.Round
+                                                )
+                                            )
+                                        }
+                                    }
+                                    p.isRedact -> {
+                                        if (p.points.size >= 2) {
+                                            val first = p.points.first()
+                                            val last = p.points.last()
+                                            drawRect(
+                                                color = Color.Black,
+                                                topLeft = Offset(minOf(first.x, last.x), minOf(first.y, last.y)),
+                                                size = androidx.compose.ui.geometry.Size(
+                                                    kotlin.math.abs(last.x - first.x),
+                                                    kotlin.math.abs(last.y - first.y)
+                                                )
+                                            )
+                                        }
+                                    }
+                                    p.isHighlighter -> {
+                                        if (p.points.size > 1) {
+                                            val drawPath = androidx.compose.ui.graphics.Path()
+                                            drawPath.moveTo(p.points.first().x, p.points.first().y)
+                                            for (i in 1 until p.points.size) {
+                                                drawPath.lineTo(p.points[i].x, p.points[i].y)
+                                            }
+                                            drawPath(
+                                                path = drawPath,
+                                                color = p.color.copy(alpha = 0.35f),
+                                                style = androidx.compose.ui.graphics.drawscope.Stroke(
+                                                    width = p.strokeWidth,
+                                                    cap = androidx.compose.ui.graphics.StrokeCap.Round,
+                                                    join = androidx.compose.ui.graphics.StrokeJoin.Round
+                                                )
+                                            )
+                                        }
+                                    }
+                                    else -> { // Normal PEN
+                                        if (p.points.size > 1) {
+                                            val drawPath = androidx.compose.ui.graphics.Path()
+                                            drawPath.moveTo(p.points.first().x, p.points.first().y)
+                                            for (i in 1 until p.points.size) {
+                                                drawPath.lineTo(p.points[i].x, p.points[i].y)
+                                            }
+                                            drawPath(
+                                                path = drawPath,
+                                                color = p.color,
+                                                style = androidx.compose.ui.graphics.drawscope.Stroke(
+                                                    width = p.strokeWidth,
+                                                    cap = androidx.compose.ui.graphics.StrokeCap.Round,
+                                                    join = androidx.compose.ui.graphics.StrokeJoin.Round
+                                                )
+                                            )
+                                        }
+                                    }
                                 }
                             }
 
                             // Draw currently in-progress active drag stroke
-                            if (currentDrawingPoints.size > 1) {
-                                if (activeTool == EditToolMode.REDACT && currentDrawingPoints.size >= 2) {
-                                    val first = currentDrawingPoints.first()
-                                    val last = currentDrawingPoints.last()
-                                    drawRect(
-                                        color = Color.Black.copy(alpha = 0.8f),
-                                        topLeft = Offset(minOf(first.x, last.x), minOf(first.y, last.y)),
-                                        size = androidx.compose.ui.geometry.Size(
-                                            kotlin.math.abs(last.x - first.x),
-                                            kotlin.math.abs(last.y - first.y)
+                            if (currentDrawingPoints.isNotEmpty()) {
+                                when {
+                                    activeTool == EditToolMode.SMUDGE && smudgeShape == SmudgeShape.RECTANGLE && currentDrawingPoints.size >= 2 -> {
+                                        val first = currentDrawingPoints.first()
+                                        val last = currentDrawingPoints.last()
+                                        drawRect(
+                                            color = smudgeColor.copy(alpha = 0.85f),
+                                            topLeft = Offset(minOf(first.x, last.x), minOf(first.y, last.y)),
+                                            size = androidx.compose.ui.geometry.Size(
+                                                kotlin.math.abs(last.x - first.x),
+                                                kotlin.math.abs(last.y - first.y)
+                                            )
                                         )
-                                    )
-                                } else {
-                                    val activePath = androidx.compose.ui.graphics.Path()
-                                    activePath.moveTo(currentDrawingPoints.first().x, currentDrawingPoints.first().y)
-                                    for (i in 1 until currentDrawingPoints.size) {
-                                        activePath.lineTo(currentDrawingPoints[i].x, currentDrawingPoints[i].y)
                                     }
-                                    drawPath(
-                                        path = activePath,
-                                        color = if (activeTool == EditToolMode.HIGHLIGHTER) selectedColor.copy(alpha = 0.35f) else selectedColor,
-                                        style = androidx.compose.ui.graphics.drawscope.Stroke(
-                                            width = if (activeTool == EditToolMode.HIGHLIGHTER) highlighterWidth else strokeWidth,
-                                            cap = androidx.compose.ui.graphics.StrokeCap.Round,
-                                            join = androidx.compose.ui.graphics.StrokeJoin.Round
+                                    activeTool == EditToolMode.SMUDGE && smudgeShape == SmudgeShape.ERASER && currentDrawingPoints.size > 1 -> {
+                                        val activePath = androidx.compose.ui.graphics.Path()
+                                        activePath.moveTo(currentDrawingPoints.first().x, currentDrawingPoints.first().y)
+                                        for (i in 1 until currentDrawingPoints.size) {
+                                            activePath.lineTo(currentDrawingPoints[i].x, currentDrawingPoints[i].y)
+                                        }
+                                        drawPath(
+                                            path = activePath,
+                                            color = Color.Transparent,
+                                            blendMode = BlendMode.Clear,
+                                            style = androidx.compose.ui.graphics.drawscope.Stroke(
+                                                width = smudgeWidth,
+                                                cap = androidx.compose.ui.graphics.StrokeCap.Round,
+                                                join = androidx.compose.ui.graphics.StrokeJoin.Round
+                                            )
                                         )
+                                    }
+                                    activeTool == EditToolMode.SMUDGE && currentDrawingPoints.size > 1 -> {
+                                        val activePath = androidx.compose.ui.graphics.Path()
+                                        activePath.moveTo(currentDrawingPoints.first().x, currentDrawingPoints.first().y)
+                                        for (i in 1 until currentDrawingPoints.size) {
+                                            activePath.lineTo(currentDrawingPoints[i].x, currentDrawingPoints[i].y)
+                                        }
+                                        drawPath(
+                                            path = activePath,
+                                            color = smudgeColor,
+                                            style = androidx.compose.ui.graphics.drawscope.Stroke(
+                                                width = smudgeWidth,
+                                                cap = androidx.compose.ui.graphics.StrokeCap.Round,
+                                                join = androidx.compose.ui.graphics.StrokeJoin.Round
+                                            )
+                                        )
+                                    }
+                                    activeTool == EditToolMode.REDACT && currentDrawingPoints.size >= 2 -> {
+                                        val first = currentDrawingPoints.first()
+                                        val last = currentDrawingPoints.last()
+                                        drawRect(
+                                            color = Color.Black.copy(alpha = 0.8f),
+                                            topLeft = Offset(minOf(first.x, last.x), minOf(first.y, last.y)),
+                                            size = androidx.compose.ui.geometry.Size(
+                                                kotlin.math.abs(last.x - first.x),
+                                                kotlin.math.abs(last.y - first.y)
+                                            )
+                                        )
+                                    }
+                                    currentDrawingPoints.size > 1 -> {
+                                        val activePath = androidx.compose.ui.graphics.Path()
+                                        activePath.moveTo(currentDrawingPoints.first().x, currentDrawingPoints.first().y)
+                                        for (i in 1 until currentDrawingPoints.size) {
+                                            activePath.lineTo(currentDrawingPoints[i].x, currentDrawingPoints[i].y)
+                                        }
+                                        drawPath(
+                                            path = activePath,
+                                            color = if (activeTool == EditToolMode.HIGHLIGHTER) selectedColor.copy(alpha = 0.35f) else selectedColor,
+                                            style = androidx.compose.ui.graphics.drawscope.Stroke(
+                                                width = if (activeTool == EditToolMode.HIGHLIGHTER) highlighterWidth else strokeWidth,
+                                                cap = androidx.compose.ui.graphics.StrokeCap.Round,
+                                                join = androidx.compose.ui.graphics.StrokeJoin.Round
+                                            )
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        // Eyedropper HUD Magnifier and Floating Action Pill
+                        if (isEyedropperActive) {
+                            // Eyedropper Loupe at finger position (offset slightly above)
+                            val loupeSize = 64.dp
+                            val loupeOffset = Offset(
+                                x = (eyedropperPosition.x - 32).coerceIn(0f, (viewWidth - 64).coerceAtLeast(0f)),
+                                y = (eyedropperPosition.y - 72).coerceIn(0f, (viewHeight - 64).coerceAtLeast(0f))
+                            )
+
+                            Box(
+                                modifier = Modifier
+                                    .offset(x = loupeOffset.x.dp, y = loupeOffset.y.dp)
+                                    .size(loupeSize)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFF1A1A1A))
+                                    .border(3.dp, Color.White, CircleShape)
+                            ) {
+                                // Sampled color center circle
+                                Box(
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .clip(CircleShape)
+                                        .background(sampledDropperColor)
+                                        .border(2.dp, Color.Black.copy(alpha = 0.5f), CircleShape)
+                                        .align(Alignment.Center)
+                                )
+                                // Crosshair dot
+                                Box(
+                                    modifier = Modifier
+                                        .size(4.dp)
+                                        .background(Color.Red, CircleShape)
+                                        .align(Alignment.Center)
+                                )
+                            }
+
+                            // Floating confirmation pill at bottom of viewport
+                            Surface(
+                                color = Color(0xFF1E1E1E),
+                                shape = RoundedCornerShape(24.dp),
+                                border = BorderStroke(1.dp, Color(0xFF333333)),
+                                shadowElevation = 8.dp,
+                                modifier = Modifier
+                                    .align(Alignment.BottomCenter)
+                                    .padding(bottom = 16.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(26.dp)
+                                            .clip(CircleShape)
+                                            .background(sampledDropperColor)
+                                            .border(1.5.dp, Color.White, CircleShape)
                                     )
+
+                                    Text(
+                                        text = "Sampled Paper Color",
+                                        color = Color.White,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Medium
+                                    )
+
+                                    Button(
+                                        onClick = {
+                                            smudgeColor = sampledDropperColor
+                                            if (!smudgeColorsList.contains(sampledDropperColor)) {
+                                                smudgeColorsList.add(0, sampledDropperColor)
+                                            }
+                                            isEyedropperActive = false
+                                        },
+                                        colors = ButtonDefaults.buttonColors(containerColor = ScannerGreen),
+                                        shape = RoundedCornerShape(16.dp),
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                                    ) {
+                                        Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color.White)
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Use Color", fontSize = 12.sp, color = Color.White, fontWeight = FontWeight.Bold)
+                                    }
+
+                                    IconButton(
+                                        onClick = { isEyedropperActive = false },
+                                        modifier = Modifier.size(28.dp)
+                                    ) {
+                                        Icon(Icons.Default.Close, contentDescription = "Cancel", tint = Color(0xFFAAAAAA), modifier = Modifier.size(18.dp))
+                                    }
                                 }
                             }
                         }
@@ -538,6 +897,153 @@ fun ImageEditStudioSheet(
                                     )
                                 }
                             }
+                            EditToolMode.SMUDGE -> {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    // Mode selector (Brush, Rectangle, Eraser)
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        FilterChip(
+                                            selected = smudgeShape == SmudgeShape.ROUND,
+                                            onClick = { smudgeShape = SmudgeShape.ROUND; isEyedropperActive = false },
+                                            label = { Text("Brush", fontSize = 12.sp) },
+                                            leadingIcon = {
+                                                Icon(Icons.Outlined.Brush, contentDescription = null, modifier = Modifier.size(16.dp))
+                                            },
+                                            colors = FilterChipDefaults.filterChipColors(
+                                                selectedContainerColor = ScannerGreen,
+                                                selectedLabelColor = Color.White,
+                                                selectedLeadingIconColor = Color.White
+                                            )
+                                        )
+
+                                        FilterChip(
+                                            selected = smudgeShape == SmudgeShape.RECTANGLE,
+                                            onClick = { smudgeShape = SmudgeShape.RECTANGLE; isEyedropperActive = false },
+                                            label = { Text("Box Patch", fontSize = 12.sp) },
+                                            leadingIcon = {
+                                                Icon(Icons.Outlined.CropSquare, contentDescription = null, modifier = Modifier.size(16.dp))
+                                            },
+                                            colors = FilterChipDefaults.filterChipColors(
+                                                selectedContainerColor = ScannerGreen,
+                                                selectedLabelColor = Color.White,
+                                                selectedLeadingIconColor = Color.White
+                                            )
+                                        )
+
+                                        FilterChip(
+                                            selected = smudgeShape == SmudgeShape.ERASER,
+                                            onClick = { smudgeShape = SmudgeShape.ERASER; isEyedropperActive = false },
+                                            label = { Text("Eraser", fontSize = 12.sp) },
+                                            leadingIcon = {
+                                                Icon(Icons.Outlined.AutoFixNormal, contentDescription = null, modifier = Modifier.size(16.dp))
+                                            },
+                                            colors = FilterChipDefaults.filterChipColors(
+                                                selectedContainerColor = ScannerGreen,
+                                                selectedLabelColor = Color.White,
+                                                selectedLeadingIconColor = Color.White
+                                            )
+                                        )
+                                    }
+
+                                    // Paper Color Swatches + Eyedropper (visible when not in Eraser mode)
+                                    if (smudgeShape != SmudgeShape.ERASER) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            LazyRow(
+                                                modifier = Modifier.weight(1f),
+                                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                items(smudgeColorsList) { color ->
+                                                    val isSelected = smudgeColor == color
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .size(28.dp)
+                                                            .clip(CircleShape)
+                                                            .background(color)
+                                                            .border(
+                                                                width = if (isSelected) 3.dp else 1.dp,
+                                                                color = if (isSelected) ScannerGreen else Color(0xFF555555),
+                                                                shape = CircleShape
+                                                            )
+                                                            .clickable {
+                                                                smudgeColor = color
+                                                                isEyedropperActive = false
+                                                            }
+                                                    )
+                                                }
+                                            }
+
+                                            Spacer(modifier = Modifier.width(8.dp))
+
+                                            Surface(
+                                                color = if (isEyedropperActive) ScannerGreen else Color(0xFF262626),
+                                                shape = RoundedCornerShape(16.dp),
+                                                border = BorderStroke(1.dp, if (isEyedropperActive) ScannerGreen else Color(0xFF444444)),
+                                                modifier = Modifier.clickable {
+                                                    isEyedropperActive = !isEyedropperActive
+                                                }
+                                            ) {
+                                                Row(
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Outlined.Colorize,
+                                                        contentDescription = "Eyedropper",
+                                                        tint = if (isEyedropperActive) Color.White else Color(0xFFCCCCCC),
+                                                        modifier = Modifier.size(16.dp)
+                                                    )
+                                                    Spacer(modifier = Modifier.width(4.dp))
+                                                    Text(
+                                                        text = "Eyedropper",
+                                                        fontSize = 11.sp,
+                                                        color = if (isEyedropperActive) Color.White else Color(0xFFCCCCCC),
+                                                        fontWeight = FontWeight.Medium
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    // Size Slider for Brush or Eraser
+                                    if (smudgeShape == SmudgeShape.ROUND || smudgeShape == SmudgeShape.ERASER) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = if (smudgeShape == SmudgeShape.ERASER) "Eraser Size" else "Brush Size",
+                                                color = Color(0xFFAAAAAA),
+                                                fontSize = 11.sp
+                                            )
+                                            Spacer(modifier = Modifier.width(10.dp))
+                                            Slider(
+                                                value = smudgeWidth,
+                                                onValueChange = { smudgeWidth = it },
+                                                valueRange = 6f..55f,
+                                                colors = SliderDefaults.colors(
+                                                    thumbColor = ScannerGreen,
+                                                    activeTrackColor = ScannerGreen,
+                                                    inactiveTrackColor = Color(0xFF333333)
+                                                ),
+                                                modifier = Modifier.height(28.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
                             EditToolMode.TEXT -> {
                                 Row(
                                     modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
@@ -597,7 +1103,7 @@ fun ImageEditStudioSheet(
 
                         // Tool Switcher Icons Row
                         Row(
-                            modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp),
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 6.dp),
                             horizontalArrangement = Arrangement.SpaceEvenly,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -605,31 +1111,37 @@ fun ImageEditStudioSheet(
                                 icon = Icons.Outlined.Brush,
                                 label = "Draw",
                                 isSelected = activeTool == EditToolMode.PEN,
-                                onClick = { activeTool = EditToolMode.PEN }
+                                onClick = { activeTool = EditToolMode.PEN; isEyedropperActive = false }
                             )
                             ToolTabItem(
                                 icon = Icons.Outlined.Highlight,
                                 label = "Highlight",
                                 isSelected = activeTool == EditToolMode.HIGHLIGHTER,
-                                onClick = { activeTool = EditToolMode.HIGHLIGHTER }
+                                onClick = { activeTool = EditToolMode.HIGHLIGHTER; isEyedropperActive = false }
+                            )
+                            ToolTabItem(
+                                icon = Icons.Outlined.AutoFixNormal,
+                                label = "Smudge",
+                                isSelected = activeTool == EditToolMode.SMUDGE,
+                                onClick = { activeTool = EditToolMode.SMUDGE }
                             )
                             ToolTabItem(
                                 icon = Icons.Outlined.TextFields,
                                 label = "Text",
                                 isSelected = activeTool == EditToolMode.TEXT,
-                                onClick = { activeTool = EditToolMode.TEXT }
+                                onClick = { activeTool = EditToolMode.TEXT; isEyedropperActive = false }
                             )
                             ToolTabItem(
                                 icon = Icons.Outlined.Security,
                                 label = "Redact",
                                 isSelected = activeTool == EditToolMode.REDACT,
-                                onClick = { activeTool = EditToolMode.REDACT }
+                                onClick = { activeTool = EditToolMode.REDACT; isEyedropperActive = false }
                             )
                             ToolTabItem(
                                 icon = Icons.Outlined.Tune,
                                 label = "Tune",
                                 isSelected = activeTool == EditToolMode.TUNE,
-                                onClick = { activeTool = EditToolMode.TUNE }
+                                onClick = { activeTool = EditToolMode.TUNE; isEyedropperActive = false }
                             )
                         }
                     }
@@ -696,7 +1208,7 @@ private fun ToolTabItem(
         modifier = Modifier
             .clip(RoundedCornerShape(8.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 4.dp)
+            .padding(horizontal = 6.dp, vertical = 4.dp)
     ) {
         Icon(
             imageVector = icon,

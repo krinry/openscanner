@@ -4,15 +4,18 @@ import android.widget.Toast
 import androidx.compose.animation.*
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -35,7 +38,6 @@ import kotlinx.coroutines.withContext
 import org.openscanner.OpenScannerApp
 import org.openscanner.data.model.Document
 import org.openscanner.data.model.Page
-import org.openscanner.data.repository.ScannerRepository
 import org.openscanner.ui.theme.ScannerGreen
 import org.openscanner.ui.viewer.components.ViewerBottomBar
 import org.openscanner.ui.viewer.dialogs.CropScanToolsSheet
@@ -45,6 +47,17 @@ import org.openscanner.ui.viewer.dialogs.ViewerMoreMenuSheet
 import org.openscanner.ui.viewer.dialogs.ViewerShareSheet
 import java.io.File
 
+/**
+ * High-performance Document Page Viewer with smooth horizontal swiping (like OKEN Scanner).
+ *
+ * Supports:
+ * - 100% Free horizontal swiping between all document pages with 16dp page spacing.
+ * - Double-tap to zoom (1x <-> 2.5x).
+ * - Gesture separation: Pan gestures are enabled ONLY when zoomed in (scale > 1.05f),
+ *   guaranteeing that 1-finger horizontal swipes reliably change pages.
+ * - Side chevron buttons for 1-tap navigation between pages.
+ * - Live page counter badge ("1/19").
+ */
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun PageViewerScreen(
@@ -107,6 +120,13 @@ fun PageViewerScreen(
         initialPage = initialIndex.coerceIn(0, (pages.size - 1).coerceAtLeast(0))
     ) {
         pages.size
+    }
+
+    // Scroll directly to target page index when loaded
+    LaunchedEffect(isLoaded, initialIndex) {
+        if (isLoaded && initialIndex in pages.indices && pagerState.currentPage != initialIndex) {
+            pagerState.scrollToPage(initialIndex)
+        }
     }
 
     // Current active page
@@ -203,10 +223,11 @@ fun PageViewerScreen(
                 .background(Color.Black),
             contentAlignment = Alignment.Center
         ) {
-            // Horizontal Pager for swiping between pages
+            // Horizontal Pager for buttery smooth left/right swiping between pages
             HorizontalPager(
                 state = pagerState,
                 userScrollEnabled = scale <= 1.05f,
+                pageSpacing = 16.dp,
                 modifier = Modifier.fillMaxSize()
             ) { pageIdx ->
                 val p = pages[pageIdx]
@@ -215,11 +236,16 @@ fun PageViewerScreen(
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .pointerInput(Unit) {
+                        .pointerInput(isActivePage, scale) {
                             detectTapGestures(
                                 onDoubleTap = {
-                                    scale = if (scale > 1.2f) 1f else 2.5f
-                                    offset = Offset.Zero
+                                    if (scale > 1.1f) {
+                                        scale = 1f
+                                        offset = Offset.Zero
+                                    } else {
+                                        scale = 2.5f
+                                        offset = Offset.Zero
+                                    }
                                 }
                             )
                         },
@@ -242,12 +268,98 @@ fun PageViewerScreen(
                                     translationY = if (isActivePage) offset.y else 0f
                                 )
                                 .then(
-                                    if (isActivePage) {
+                                    if (isActivePage && scale > 1.05f) {
                                         Modifier.transformable(state = transformState)
                                     } else {
                                         Modifier
                                     }
                                 )
+                        )
+                    }
+                }
+            }
+
+            // Left Navigation Chevron Arrow (shown when not on first page and not zoomed in)
+            if (pagerState.currentPage > 0 && scale <= 1.05f) {
+                Surface(
+                    color = Color.Black.copy(alpha = 0.5f),
+                    shape = CircleShape,
+                    modifier = Modifier
+                        .align(Alignment.CenterStart)
+                        .padding(start = 12.dp)
+                        .size(42.dp)
+                        .clickable {
+                            coroutineScope.launch {
+                                pagerState.animateScrollToPage(pagerState.currentPage - 1)
+                            }
+                        }
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Previous Page",
+                            tint = Color.White,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+            }
+
+            // Right Navigation Chevron Arrow (shown when not on last page and not zoomed in)
+            if (pagerState.currentPage < pages.size - 1 && scale <= 1.05f) {
+                Surface(
+                    color = Color.Black.copy(alpha = 0.5f),
+                    shape = CircleShape,
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .padding(end = 12.dp)
+                        .size(42.dp)
+                        .clickable {
+                            coroutineScope.launch {
+                                pagerState.animateScrollToPage(pagerState.currentPage + 1)
+                            }
+                        }
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                            contentDescription = "Next Page",
+                            tint = Color.White,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+            }
+
+            // Floating Reset Zoom Pill (appears when user is zoomed in)
+            if (scale > 1.05f) {
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = Color.Black.copy(alpha = 0.75f),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, ScannerGreen),
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(16.dp)
+                        .clickable {
+                            scale = 1f
+                            offset = Offset.Zero
+                        }
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                    ) {
+                        Text(
+                            text = "${(scale * 10).toInt() / 10f}x",
+                            color = ScannerGreen,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Reset",
+                            color = Color.White,
+                            fontSize = 12.sp
                         )
                     }
                 }
@@ -264,7 +376,7 @@ fun PageViewerScreen(
         )
     }
 
-    // 2. Image Edit Studio Sheet (Draw, Highlighter, Text, Redact/Mosaic, Tune)
+    // 2. Image Edit Studio Sheet (Draw, Highlighter, Smudge, Text, Redact, Tune)
     if (showImageEditSheet) {
         ImageEditStudioSheet(
             page = activePage,
