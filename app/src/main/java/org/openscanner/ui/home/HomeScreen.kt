@@ -7,6 +7,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -149,7 +151,7 @@ fun HomeScreen(
                 onCreateFolderClick = { showNewFolderDialog = true },
                 onNavigateUp = { viewModel.navigateUp() },
                 onProfileClick = onNavigateToProfile,
-                showSubHeader = selectedTab == 0
+                showSubHeader = false
             )
         },
         bottomBar = {
@@ -228,80 +230,166 @@ fun HomeScreen(
             } else {
                 // Documents Tab Content
                 if (documents.isEmpty() && foldersWithCount.isEmpty()) {
-                    // Empty State
+                    // Empty State with KingKong Bar & Recent Docs Header preserved at top
                     Column(
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(32.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
+                            .verticalScroll(rememberScrollState())
                     ) {
-                        Surface(
-                            modifier = Modifier.size(80.dp),
-                            shape = androidx.compose.foundation.shape.CircleShape,
-                            color = colors.primaryContainer
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = if (selectedFolder != null) Icons.Default.FolderOpen else Icons.Default.Description,
-                                    contentDescription = null,
-                                    tint = colors.primary,
-                                    modifier = Modifier.size(40.dp)
-                                )
-                            }
+                        if (selectedFolder == null && searchQuery.isEmpty()) {
+                            HomeKingKongGrid(
+                                onSmartScanClick = { onNavigateToCamera(-1L, "Document") },
+                                onImportImagesClick = { imagePickerLauncher.launch("image/*") },
+                                onImportFilesClick = { pdfPickerLauncher.launch(arrayOf("application/pdf")) },
+                                onIdCardClick = { onNavigateToCamera(-1L, "ID Card") },
+                                onOcrClick = { onNavigateToCamera(-1L, "Document") },
+                                onPdfToolsClick = { showImportDialog = true },
+                                onWatermarkClick = {
+                                    Toast.makeText(context, "Scan or import a document first to add watermark", Toast.LENGTH_SHORT).show()
+                                },
+                                onAllToolsClick = { selectedTab = 1 }
+                            )
                         }
-                        Spacer(modifier = Modifier.height(18.dp))
-                        Text(
-                            text = if (searchQuery.isNotEmpty()) "No results found"
-                            else if (selectedFolder != null) "Folder is Empty"
-                            else "No Scanned Documents",
-                            color = colors.textPrimary,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 18.sp
+
+                        RecentDocsHeader(
+                            selectedFolder = selectedFolder,
+                            totalDocCount = totalDocCount,
+                            foldersWithCount = allFoldersWithCount,
+                            onSelectFolder = { viewModel.selectFolder(it) },
+                            onNavigateUp = { viewModel.navigateUp() },
+                            sortOrder = sortOrder,
+                            onSortOrderChanged = { viewModel.setSortOrder(it) },
+                            isGridView = isGridView,
+                            onToggleGridView = { viewModel.toggleGridView() },
+                            onEnterSelectMode = { viewModel.toggleSelectMode() },
+                            onCreateFolderClick = { showNewFolderDialog = true }
                         )
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Text(
-                            text = if (searchQuery.isNotEmpty()) "Try a different search keyword"
-                            else if (selectedFolder != null) "Add documents or create subfolders inside '${selectedFolder?.name}'"
-                            else "Tap the camera shutter to scan your first page",
-                            color = colors.textSecondary,
-                            fontSize = 13.sp,
-                            textAlign = TextAlign.Center
-                        )
-                        if (searchQuery.isEmpty()) {
-                            Spacer(modifier = Modifier.height(24.dp))
-                            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                if (selectedFolder != null) {
-                                    OutlinedButton(
-                                        onClick = { showNewFolderDialog = true },
-                                        colors = ButtonDefaults.outlinedButtonColors(contentColor = colors.primary)
-                                    ) {
-                                        Icon(Icons.Default.CreateNewFolder, contentDescription = null, modifier = Modifier.size(18.dp))
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Text("New Subfolder")
-                                    }
+
+                        // Empty State Graphic and Shutter Prompt
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 28.dp, bottom = 48.dp, start = 32.dp, end = 32.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Surface(
+                                modifier = Modifier.size(76.dp),
+                                shape = androidx.compose.foundation.shape.CircleShape,
+                                color = colors.primaryContainer
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = if (selectedFolder != null) Icons.Default.FolderOpen else Icons.Default.Description,
+                                        contentDescription = null,
+                                        tint = colors.primary,
+                                        modifier = Modifier.size(38.dp)
+                                    )
                                 }
-                                Button(
-                                    onClick = { onNavigateToCamera(-1L, "Document") },
-                                    colors = ButtonDefaults.buttonColors(containerColor = colors.primary)
-                                ) {
-                                    Icon(Icons.Default.CameraAlt, contentDescription = null, modifier = Modifier.size(18.dp))
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text("Start Scanning")
+                            }
+                            Spacer(modifier = Modifier.height(18.dp))
+                            Text(
+                                text = if (searchQuery.isNotEmpty()) "No results found"
+                                else if (selectedFolder != null) "Folder is Empty"
+                                else "Smart scan instantly makes docs crystal clear",
+                                color = colors.textPrimary,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 17.sp,
+                                textAlign = TextAlign.Center
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = if (searchQuery.isNotEmpty()) "Try a different search keyword"
+                                else if (selectedFolder != null) "Add documents or create subfolders inside '${selectedFolder?.name}'"
+                                else "Tap the camera shutter or select a quick option above",
+                                color = colors.textSecondary,
+                                fontSize = 13.sp,
+                                textAlign = TextAlign.Center
+                            )
+                            if (searchQuery.isEmpty()) {
+                                Spacer(modifier = Modifier.height(20.dp))
+                                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                    if (selectedFolder != null) {
+                                        OutlinedButton(
+                                            onClick = { showNewFolderDialog = true },
+                                            colors = ButtonDefaults.outlinedButtonColors(contentColor = colors.primary)
+                                        ) {
+                                            Icon(Icons.Default.CreateNewFolder, contentDescription = null, modifier = Modifier.size(18.dp))
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text("New Subfolder")
+                                        }
+                                    } else {
+                                        OutlinedButton(
+                                            onClick = { imagePickerLauncher.launch("image/*") },
+                                            colors = ButtonDefaults.outlinedButtonColors(contentColor = colors.primary)
+                                        ) {
+                                            Icon(Icons.Default.AddPhotoAlternate, contentDescription = null, modifier = Modifier.size(18.dp))
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text("Import Photos")
+                                        }
+                                    }
+                                    Button(
+                                        onClick = { onNavigateToCamera(-1L, "Document") },
+                                        colors = ButtonDefaults.buttonColors(containerColor = colors.primary)
+                                    ) {
+                                        Icon(Icons.Default.CameraAlt, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("Start Scanning")
+                                    }
                                 }
                             }
                         }
                     }
                 } else {
-                    // Content with Folder Section & Documents
+                    // Content with KingKong Bar, Recent Docs Header, Folders & Documents
                     if (isGridView) {
                         LazyVerticalGrid(
                             columns = GridCells.Fixed(2),
-                            contentPadding = PaddingValues(16.dp),
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
                             verticalArrangement = Arrangement.spacedBy(12.dp),
                             modifier = Modifier.fillMaxSize()
                         ) {
+                            // KingKong quick access grid at the root level
+                            if (selectedFolder == null && searchQuery.isEmpty()) {
+                                item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(2) }) {
+                                    HomeKingKongGrid(
+                                        onSmartScanClick = { onNavigateToCamera(-1L, "Document") },
+                                        onImportImagesClick = { imagePickerLauncher.launch("image/*") },
+                                        onImportFilesClick = { pdfPickerLauncher.launch(arrayOf("application/pdf")) },
+                                        onIdCardClick = { onNavigateToCamera(-1L, "ID Card") },
+                                        onOcrClick = { onNavigateToCamera(-1L, "Document") },
+                                        onPdfToolsClick = {
+                                            val firstDoc = documents.firstOrNull()
+                                            if (firstDoc != null) onNavigateToEditPdf(firstDoc.id, 0)
+                                            else showImportDialog = true
+                                        },
+                                        onWatermarkClick = {
+                                            val firstDoc = documents.firstOrNull()
+                                            if (firstDoc != null) onNavigateToEditPdf(firstDoc.id, 0)
+                                            else Toast.makeText(context, "Scan or import a document first to add watermark", Toast.LENGTH_SHORT).show()
+                                        },
+                                        onAllToolsClick = { selectedTab = 1 }
+                                    )
+                                }
+                            }
+
+                            // Recent Docs Section Header with filter controls
+                            item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(2) }) {
+                                RecentDocsHeader(
+                                    selectedFolder = selectedFolder,
+                                    totalDocCount = totalDocCount,
+                                    foldersWithCount = allFoldersWithCount,
+                                    onSelectFolder = { viewModel.selectFolder(it) },
+                                    onNavigateUp = { viewModel.navigateUp() },
+                                    sortOrder = sortOrder,
+                                    onSortOrderChanged = { viewModel.setSortOrder(it) },
+                                    isGridView = isGridView,
+                                    onToggleGridView = { viewModel.toggleGridView() },
+                                    onEnterSelectMode = { viewModel.toggleSelectMode() },
+                                    onCreateFolderClick = { showNewFolderDialog = true }
+                                )
+                            }
+
                             // Folders section inside grid (top level or subfolders)
                             if (foldersWithCount.isNotEmpty() || selectedFolder != null) {
                                 item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(2) }) {
@@ -333,6 +421,7 @@ fun HomeScreen(
                                     onLongClick = {
                                         viewModel.toggleSelectDoc(doc.id)
                                     },
+                                    onSelectToggle = { viewModel.toggleSelectDoc(doc.id) },
                                     onDelete = { docToDelete = doc },
                                     onRename = { docToRename = doc },
                                     onMoveToFolder = { docToMove = doc }
@@ -345,6 +434,47 @@ fun HomeScreen(
                             contentPadding = PaddingValues(vertical = 8.dp),
                             modifier = Modifier.fillMaxSize()
                         ) {
+                            // KingKong quick access grid at the root level
+                            if (selectedFolder == null && searchQuery.isEmpty()) {
+                                item {
+                                    HomeKingKongGrid(
+                                        onSmartScanClick = { onNavigateToCamera(-1L, "Document") },
+                                        onImportImagesClick = { imagePickerLauncher.launch("image/*") },
+                                        onImportFilesClick = { pdfPickerLauncher.launch(arrayOf("application/pdf")) },
+                                        onIdCardClick = { onNavigateToCamera(-1L, "ID Card") },
+                                        onOcrClick = { onNavigateToCamera(-1L, "Document") },
+                                        onPdfToolsClick = {
+                                            val firstDoc = documents.firstOrNull()
+                                            if (firstDoc != null) onNavigateToEditPdf(firstDoc.id, 0)
+                                            else showImportDialog = true
+                                        },
+                                        onWatermarkClick = {
+                                            val firstDoc = documents.firstOrNull()
+                                            if (firstDoc != null) onNavigateToEditPdf(firstDoc.id, 0)
+                                            else Toast.makeText(context, "Scan or import a document first to add watermark", Toast.LENGTH_SHORT).show()
+                                        },
+                                        onAllToolsClick = { selectedTab = 1 }
+                                    )
+                                }
+                            }
+
+                            // Recent Docs Section Header with filter controls
+                            item {
+                                RecentDocsHeader(
+                                    selectedFolder = selectedFolder,
+                                    totalDocCount = totalDocCount,
+                                    foldersWithCount = allFoldersWithCount,
+                                    onSelectFolder = { viewModel.selectFolder(it) },
+                                    onNavigateUp = { viewModel.navigateUp() },
+                                    sortOrder = sortOrder,
+                                    onSortOrderChanged = { viewModel.setSortOrder(it) },
+                                    isGridView = isGridView,
+                                    onToggleGridView = { viewModel.toggleGridView() },
+                                    onEnterSelectMode = { viewModel.toggleSelectMode() },
+                                    onCreateFolderClick = { showNewFolderDialog = true }
+                                )
+                            }
+
                             // Folders section inside list (top level or subfolders)
                             if (foldersWithCount.isNotEmpty() || selectedFolder != null) {
                                 item {
@@ -357,7 +487,7 @@ fun HomeScreen(
                                         onDeleteFolder = { folderToDelete = it },
                                         onCreateFolderClick = { showNewFolderDialog = true }
                                     )
-                                    Spacer(modifier = Modifier.height(10.dp))
+                                    Spacer(modifier = Modifier.height(6.dp))
                                 }
                             }
 

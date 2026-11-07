@@ -23,6 +23,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -47,6 +48,7 @@ fun ScannerDocumentListItem(
     onRename: () -> Unit,
     onMoveToFolder: () -> Unit = {}
 ) {
+    val context = LocalContext.current
     val colors = ScannerTheme.colors
     val dateFormat = remember { SimpleDateFormat("dd/MM/yy HH:mm", Locale.getDefault()) }
 
@@ -70,14 +72,14 @@ fun ScannerDocumentListItem(
         // Thumbnail with Green Check Badge
         Box(
             modifier = Modifier
-                .width(68.dp)
-                .height(86.dp)
-                .clip(RoundedCornerShape(6.dp))
+                .width(72.dp)
+                .height(92.dp)
+                .clip(RoundedCornerShape(8.dp))
                 .background(colors.surfaceSecondary)
-                .border(0.5.dp, colors.cardBorder, RoundedCornerShape(6.dp))
+                .border(0.5.dp, colors.cardBorder, RoundedCornerShape(8.dp))
         ) {
             val thumbFile = remember(document.id) {
-                File("/data/data/org.openscanner/files/thumbs").listFiles()
+                File(context.filesDir, "thumbs").listFiles()
                     ?.firstOrNull { it.name.startsWith("thumb_${document.id}_") }
             }
 

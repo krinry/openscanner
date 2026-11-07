@@ -21,6 +21,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -40,10 +41,12 @@ fun ScannerDocumentGridCard(
     isSelectMode: Boolean,
     onClick: () -> Unit,
     onLongClick: () -> Unit = {},
+    onSelectToggle: () -> Unit = {},
     onDelete: () -> Unit,
     onRename: () -> Unit,
     onMoveToFolder: () -> Unit = {}
 ) {
+    val context = LocalContext.current
     val colors = ScannerTheme.colors
     val dateFormat = remember { SimpleDateFormat("dd/MM/yy", Locale.getDefault()) }
 
@@ -51,7 +54,7 @@ fun ScannerDocumentGridCard(
         modifier = Modifier
             .fillMaxWidth()
             .combinedClickable(
-                onClick = { if (isSelectMode) onLongClick() else onClick() },
+                onClick = { if (isSelectMode) onSelectToggle() else onClick() },
                 onLongClick = onLongClick
             ),
         shape = RoundedCornerShape(12.dp),
@@ -70,7 +73,7 @@ fun ScannerDocumentGridCard(
                 contentAlignment = Alignment.Center
             ) {
                 val thumbFile = remember(document.id) {
-                    File("/data/data/org.openscanner/files/thumbs").listFiles()
+                    File(context.filesDir, "thumbs").listFiles()
                         ?.firstOrNull { it.name.startsWith("thumb_${document.id}_") }
                 }
 
