@@ -149,4 +149,38 @@ Java_org_openscanner_cv_NativeScannerEngine_adjustTones(
     AndroidBitmap_unlockPixels(env, bitmap);
 }
 
+JNIEXPORT jfloatArray JNICALL
+Java_org_openscanner_cv_NativeScannerEngine_snapPointInBitmap(
+    JNIEnv* env,
+    jobject /* this */,
+    jobject bitmap,
+    jfloat ptX,
+    jfloat ptY,
+    jfloat searchRadius
+) {
+    AndroidBitmapInfo info;
+    void* pixels = nullptr;
+
+    if (AndroidBitmap_getInfo(env, bitmap, &info) < 0) return nullptr;
+    if (AndroidBitmap_lockPixels(env, bitmap, &pixels) < 0) return nullptr;
+
+    bool isSnapped = false;
+    Point2D snapped = snapPointToNearestEdge(
+        static_cast<const uint32_t*>(pixels),
+        info.width,
+        info.height,
+        ptX,
+        ptY,
+        searchRadius,
+        isSnapped
+    );
+
+    AndroidBitmap_unlockPixels(env, bitmap);
+
+    jfloatArray result = env->NewFloatArray(3);
+    jfloat res[3] = {snapped.x, snapped.y, isSnapped ? 1.0f : 0.0f};
+    env->SetFloatArrayRegion(result, 0, 3, res);
+    return result;
+}
+
 } // extern "C"

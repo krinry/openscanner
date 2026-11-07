@@ -30,6 +30,7 @@ import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.hypot
 
 data class BatchCaptureItem(
     val id: Long = System.nanoTime(),
@@ -45,10 +46,11 @@ enum class QualityMode(val label: String, val description: String) {
     UHD("UHD", "Maximum sensor resolution")
 }
 
-enum class StabilityState {
-    SEARCHING,     // Scanning for document contours
-    STABILIZING,   // Document detected, aligning
-    STEADY_LOCKED  // Document locked and steady (ready to snap)
+enum class StabilityState(val message: String) {
+    SEARCHING("ALIGN DOCUMENT"),
+    MOVE_CLOSER("MOVE CLOSER"),
+    STABILIZING("HOLD STEADY"),
+    STEADY_LOCKED("AUTO CAPTURING...")
 }
 
 class CameraViewModel(application: Application) : AndroidViewModel(application) {
@@ -97,6 +99,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private var steadyFrameCount = 0
     private var lastStableTimestamp = 0L
     private var consecutiveMissingFrames = 0
+    private val frameCache = java.util.ArrayDeque<DocumentQuadrilateral>(5)
 
     fun toggleAutoCapture() {
         _autoCaptureMode.value = !_autoCaptureMode.value
@@ -111,12 +114,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         _detectedQuad.value = null
         _stabilityState.value = StabilityState.SEARCHING
         steadyFrameCount = 0
+        frameCache.clear()
     }
 
     fun onDocumentDetected(quad: DocumentQuadrilateral, width: Int, height: Int) {
         val isReal = !quad.isDefaultFallback(width.toFloat(), height.toFloat())
         if (!isReal) {
             steadyFrameCount = 0
+            frameCache.clear()
             _stabilityState.value = StabilityState.SEARCHING
             consecutiveMissingFrames++
             if (consecutiveMissingFrames >= 4) {
@@ -126,9 +131,18 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
         consecutiveMissingFrames = 0
 
+        // Document size proximity check (matches OKEN Scanner closer check)
+        val minX = minOf(quad.topLeft.x, quad.bottomLeft.x)
+        val maxX = maxOf(quad.topRight.x, quad.bottomRight.x)
+        val minY = minOf(quad.topLeft.y, quad.topRight.y)
+        val maxY = maxOf(quad.bottomLeft.y, quad.bottomRight.y)
+        val docW = maxX - minX
+        val docH = maxY - minY
+
         val prev = _detectedQuad.value
         val smoothed = if (prev == null || _previewDimens.value != Pair(width, height)) {
             steadyFrameCount = 0
+            frameCache.clear()
             _stabilityState.value = StabilityState.SEARCHING
             quad
         } else {
@@ -143,28 +157,54 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 bottomLeft = lerp(prev.bottomLeft, quad.bottomLeft)
             )
 
-            // Measure corner displacement across frames for stability
-            val maxDelta = maxOf(
-                quad.topLeft.distanceTo(prev.topLeft),
-                quad.topRight.distanceTo(prev.topRight),
-                quad.bottomRight.distanceTo(prev.bottomRight),
-                quad.bottomLeft.distanceTo(prev.bottomLeft)
-            )
+            // Cache sliding window of 5 frames
+            frameCache.addLast(smoothedQuad)
+            if (frameCache.size > 5) {
+                frameCache.removeFirst()
+            }
 
-            if (maxDelta < 16f) {
-                steadyFrameCount++
-                if (steadyFrameCount >= 5) {
-                    if (_stabilityState.value != StabilityState.STEADY_LOCKED) {
-                        _stabilityState.value = StabilityState.STEADY_LOCKED
-                        lastStableTimestamp = System.currentTimeMillis()
-                    } else if (_autoCaptureMode.value && System.currentTimeMillis() - lastStableTimestamp >= 750L) {
-                        // Document has been steady for > 750ms -> Trigger auto shutter!
-                        _triggerAutoCapture.value = System.currentTimeMillis()
-                        steadyFrameCount = 0
-                        lastStableTimestamp = System.currentTimeMillis() + 2500L // Cool-down
+            if (docW < width * 0.35f || docH < height * 0.35f) {
+                // Page occupies less than 35% of frame -> recommend moving closer
+                _stabilityState.value = StabilityState.MOVE_CLOSER
+                steadyFrameCount = 0
+            } else if (frameCache.size >= 4) {
+                // Calculate max corner variance across the 5 cached frames
+                val avgTLx = frameCache.map { it.topLeft.x }.average().toFloat()
+                val avgTLy = frameCache.map { it.topLeft.y }.average().toFloat()
+                val avgTRx = frameCache.map { it.topRight.x }.average().toFloat()
+                val avgTRy = frameCache.map { it.topRight.y }.average().toFloat()
+                val avgBRx = frameCache.map { it.bottomRight.x }.average().toFloat()
+                val avgBRy = frameCache.map { it.bottomRight.y }.average().toFloat()
+                val avgBLx = frameCache.map { it.bottomLeft.x }.average().toFloat()
+                val avgBLy = frameCache.map { it.bottomLeft.y }.average().toFloat()
+
+                var maxVariance = 0f
+                for (f in frameCache) {
+                    val d1 = hypot(f.topLeft.x - avgTLx, f.topLeft.y - avgTLy)
+                    val d2 = hypot(f.topRight.x - avgTRx, f.topRight.y - avgTRy)
+                    val d3 = hypot(f.bottomRight.x - avgBRx, f.bottomRight.y - avgBRy)
+                    val d4 = hypot(f.bottomLeft.x - avgBLx, f.bottomLeft.y - avgBLy)
+                    maxVariance = maxOf(maxVariance, d1, d2, d3, d4)
+                }
+
+                if (maxVariance < 14f) {
+                    steadyFrameCount++
+                    if (steadyFrameCount >= 5) {
+                        if (_stabilityState.value != StabilityState.STEADY_LOCKED) {
+                            _stabilityState.value = StabilityState.STEADY_LOCKED
+                            lastStableTimestamp = System.currentTimeMillis()
+                        } else if (_autoCaptureMode.value && System.currentTimeMillis() - lastStableTimestamp >= 700L) {
+                            // Document has been steady for > 700ms -> Trigger auto shutter!
+                            _triggerAutoCapture.value = System.currentTimeMillis()
+                            steadyFrameCount = 0
+                            lastStableTimestamp = System.currentTimeMillis() + 2500L // Cool-down
+                        }
+                    } else {
+                        _stabilityState.value = StabilityState.STABILIZING
                     }
                 } else {
-                    _stabilityState.value = StabilityState.STABILIZING
+                    steadyFrameCount = 0
+                    _stabilityState.value = StabilityState.SEARCHING
                 }
             } else {
                 steadyFrameCount = 0

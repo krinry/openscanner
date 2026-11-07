@@ -31,6 +31,7 @@ fun DraggablePolygonOverlay(
     onHandleActive: (handlePoint: Offset?, touchPoint: Offset?, isSnapped: Boolean) -> Unit = { _, _, _ -> },
     zoomScale: Float = 1f,
     onTransform: (zoomChange: Float, panChange: Offset) -> Unit = { _, _ -> },
+    onSnapPoint: ((rawPoint: PointF, searchRadiusPx: Float) -> Pair<PointF, Boolean>)? = null,
     modifier: Modifier = Modifier
 ) {
     val haptic = LocalHapticFeedback.current
@@ -41,6 +42,7 @@ fun DraggablePolygonOverlay(
     val currentOnHandleActive by rememberUpdatedState(onHandleActive)
     val currentOnTransform by rememberUpdatedState(onTransform)
     val currentZoomScale by rememberUpdatedState(zoomScale)
+    val currentOnSnapPoint by rememberUpdatedState(onSnapPoint)
 
     var activeHandleIndex by remember { mutableIntStateOf(-1) }
     var wasSnapped by remember { mutableStateOf(false) }
@@ -225,6 +227,17 @@ fun DraggablePolygonOverlay(
                                         }
                                     }
 
+                                    // If not snapped to right angle, check CV edge absorption (magnetic snap to document border)
+                                    if (!isSnapped) {
+                                        currentOnSnapPoint?.invoke(PointF(sx, sy), snapDist)?.let { (snappedPt, didSnap) ->
+                                            if (didSnap) {
+                                                sx = snappedPt.x
+                                                sy = snappedPt.y
+                                                isSnapped = true
+                                            }
+                                        }
+                                    }
+
                                     return clampPt(sx, sy)
                                 }
 
@@ -236,6 +249,12 @@ fun DraggablePolygonOverlay(
                                     4 -> {
                                         var ny = curQ.topLeft.y + dy
                                         if (abs(ny - b.top) < snapDist) { ny = b.top; isSnapped = true }
+                                        else if (!isSnapped) {
+                                            val midX = (curQ.topLeft.x + curQ.topRight.x) / 2f
+                                            currentOnSnapPoint?.invoke(PointF(midX, ny), snapDist)?.let { (snappedPt, didSnap) ->
+                                                if (didSnap) { ny = snappedPt.y; isSnapped = true }
+                                            }
+                                        }
                                         val cny = clampPt(0f, ny).y
                                         curQ.copy(
                                             topLeft = PointF(curQ.topLeft.x, cny),
@@ -245,6 +264,12 @@ fun DraggablePolygonOverlay(
                                     5 -> {
                                         var nx = curQ.topRight.x + dx
                                         if (abs(nx - b.right) < snapDist) { nx = b.right; isSnapped = true }
+                                        else if (!isSnapped) {
+                                            val midY = (curQ.topRight.y + curQ.bottomRight.y) / 2f
+                                            currentOnSnapPoint?.invoke(PointF(nx, midY), snapDist)?.let { (snappedPt, didSnap) ->
+                                                if (didSnap) { nx = snappedPt.x; isSnapped = true }
+                                            }
+                                        }
                                         val cnx = clampPt(nx, 0f).x
                                         curQ.copy(
                                             topRight = PointF(cnx, curQ.topRight.y),
@@ -254,6 +279,12 @@ fun DraggablePolygonOverlay(
                                     6 -> {
                                         var ny = curQ.bottomLeft.y + dy
                                         if (abs(ny - b.bottom) < snapDist) { ny = b.bottom; isSnapped = true }
+                                        else if (!isSnapped) {
+                                            val midX = (curQ.bottomLeft.x + curQ.bottomRight.x) / 2f
+                                            currentOnSnapPoint?.invoke(PointF(midX, ny), snapDist)?.let { (snappedPt, didSnap) ->
+                                                if (didSnap) { ny = snappedPt.y; isSnapped = true }
+                                            }
+                                        }
                                         val cny = clampPt(0f, ny).y
                                         curQ.copy(
                                             bottomLeft = PointF(curQ.bottomLeft.x, cny),
@@ -263,6 +294,12 @@ fun DraggablePolygonOverlay(
                                     7 -> {
                                         var nx = curQ.topLeft.x + dx
                                         if (abs(nx - b.left) < snapDist) { nx = b.left; isSnapped = true }
+                                        else if (!isSnapped) {
+                                            val midY = (curQ.topLeft.y + curQ.bottomLeft.y) / 2f
+                                            currentOnSnapPoint?.invoke(PointF(nx, midY), snapDist)?.let { (snappedPt, didSnap) ->
+                                                if (didSnap) { nx = snappedPt.x; isSnapped = true }
+                                            }
+                                        }
                                         val cnx = clampPt(nx, 0f).x
                                         curQ.copy(
                                             topLeft = PointF(cnx, curQ.topLeft.y),

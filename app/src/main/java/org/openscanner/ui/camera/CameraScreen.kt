@@ -39,6 +39,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -235,6 +236,10 @@ fun CameraScreen(
     var idCardFrontBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var viewLayoutSize by remember { mutableStateOf(IntSize.Zero) }
 
+    // Clean-room Horizon Leveler (OKEN Scanner SensorUtil/SensorView equivalent)
+    val leveler = remember { org.openscanner.camera.CameraLeveler(context) }
+    val levelerState by leveler.levelerState.collectAsState()
+
     // Flashlight / Torch dynamic control & cleanup
     LaunchedEffect(flashMode, camera) {
         camera?.let { cam ->
@@ -247,7 +252,9 @@ fun CameraScreen(
     }
 
     DisposableEffect(Unit) {
+        leveler.start()
         onDispose {
+            leveler.stop()
             camera?.cameraControl?.enableTorch(false)
         }
     }
@@ -394,74 +401,84 @@ fun CameraScreen(
             .background(Color.Black)
             .onSizeChanged { viewLayoutSize = it }
     ) {
-        // CameraX Live Preview
-        AndroidView(
-            modifier = Modifier.fillMaxSize(),
-            factory = { ctx ->
-                val previewView = PreviewView(ctx).apply {
-                    scaleType = PreviewView.ScaleType.FILL_CENTER
-                }
-                val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
-                cameraProviderFuture.addListener({
-                    val cameraProvider = cameraProviderFuture.get()
-                    val preview = Preview.Builder()
-                        .setTargetAspectRatio(AspectRatio.RATIO_4_3)
-                        .build().also {
-                            it.setSurfaceProvider(previewView.surfaceProvider)
-                        }
-
-                    val capture = ImageCapture.Builder()
-                        .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
-                        .setFlashMode(flashMode)
-                        .setTargetAspectRatio(AspectRatio.RATIO_4_3)
-                        .build()
-                    imageCapture = capture
-
-                    val analysis = ImageAnalysis.Builder()
-                        .setTargetAspectRatio(AspectRatio.RATIO_4_3)
-                        .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                        .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
-                        .build()
-
-                    analysis.setAnalyzer(
-                        Executors.newSingleThreadExecutor(),
-                        DocumentAnalyzer { quad, w, h ->
-                            if (autoCropEnabled) {
-                                viewModel.onDocumentDetected(quad, w, h)
-                            }
-                        }
-                    )
-
-                    try {
-                        cameraProvider.unbindAll()
-                        val boundCam = cameraProvider.bindToLifecycle(
-                            lifecycleOwner,
-                            CameraSelector.DEFAULT_BACK_CAMERA,
-                            preview,
-                            capture,
-                            analysis
-                        )
-                        camera = boundCam
-                    } catch (e: Exception) {
-                        e.printStackTrace()
+        // 3:4 Viewfinder Frame (Clean-room 1:1 camera framing, zero cropping)
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .align(Alignment.Center)
+                .aspectRatio(3f / 4f)
+                .clipToBounds()
+        ) {
+            // CameraX Live Preview
+            AndroidView(
+                modifier = Modifier.fillMaxSize(),
+                factory = { ctx ->
+                    val previewView = PreviewView(ctx).apply {
+                        scaleType = PreviewView.ScaleType.FIT_CENTER
                     }
-                }, ContextCompat.getMainExecutor(ctx))
+                    val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
+                    cameraProviderFuture.addListener({
+                        val cameraProvider = cameraProviderFuture.get()
+                        val preview = Preview.Builder()
+                            .setTargetAspectRatio(AspectRatio.RATIO_4_3)
+                            .build().also {
+                                it.setSurfaceProvider(previewView.surfaceProvider)
+                            }
 
-                previewView
-            }
-        )
+                        val capture = ImageCapture.Builder()
+                            .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
+                            .setFlashMode(flashMode)
+                            .setTargetAspectRatio(AspectRatio.RATIO_4_3)
+                            .build()
+                        imageCapture = capture
 
-        // Viewfinder overlay with dynamic guides (ID Card, Book spine/badges, QR, Quad)
-        ViewfinderOverlay(
-            mode = currentMode,
-            quad = if (autoCropEnabled) detectedQuad else null,
-            previewWidth = previewDimens.first,
-            previewHeight = previewDimens.second,
-            showGrid = showGrid,
-            idCardStep = if (idCardFrontBitmap == null) 1 else 2,
-            stabilityState = stabilityState,
-            autoCaptureMode = autoCaptureMode
-        )
+                        val analysis = ImageAnalysis.Builder()
+                            .setTargetAspectRatio(AspectRatio.RATIO_4_3)
+                            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                            .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
+                            .build()
+
+                        analysis.setAnalyzer(
+                            Executors.newSingleThreadExecutor(),
+                            DocumentAnalyzer { quad, w, h ->
+                                if (autoCropEnabled) {
+                                    viewModel.onDocumentDetected(quad, w, h)
+                                }
+                            }
+                        )
+
+                        try {
+                            cameraProvider.unbindAll()
+                            val boundCam = cameraProvider.bindToLifecycle(
+                                lifecycleOwner,
+                                CameraSelector.DEFAULT_BACK_CAMERA,
+                                preview,
+                                capture,
+                                analysis
+                            )
+                            camera = boundCam
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
+                    }, ContextCompat.getMainExecutor(ctx))
+
+                    previewView
+                }
+            )
+
+            // Viewfinder overlay with dynamic guides (ID Card, Book spine/badges, QR, Quad, Leveler)
+            ViewfinderOverlay(
+                mode = currentMode,
+                quad = if (autoCropEnabled) detectedQuad else null,
+                previewWidth = previewDimens.first,
+                previewHeight = previewDimens.second,
+                showGrid = showGrid,
+                idCardStep = if (idCardFrontBitmap == null) 1 else 2,
+                stabilityState = stabilityState,
+                autoCaptureMode = autoCaptureMode,
+                levelerState = levelerState
+            )
+        }
 
         // Top Control Bar (5 items matching uploaded screenshot layout)
         Row(
@@ -814,6 +831,55 @@ fun CameraScreen(
                             )
                         } else {
                             Spacer(modifier = Modifier.height(3.dp))
+                        }
+                    }
+                }
+            }
+
+            // Single vs Batch Mode Switcher (OKEN Scanner NORMAL_SINGLE vs NORMAL_MULTI clean-room UI)
+            if (currentMode == CaptureMode.DOCUMENT) {
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = Color(0xFF1E1E1E),
+                    border = BorderStroke(1.dp, Color(0xFF333333)),
+                    modifier = Modifier.padding(bottom = 10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(3.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Single Mode Option
+                        Surface(
+                            shape = RoundedCornerShape(11.dp),
+                            color = if (cropAfterScan) ScannerGreen else Color.Transparent,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(11.dp))
+                                .clickable { viewModel.setCropAfterScan(true) }
+                        ) {
+                            Text(
+                                text = "Single",
+                                color = if (cropAfterScan) Color.White else Color.LightGray,
+                                fontSize = 11.sp,
+                                fontWeight = if (cropAfterScan) FontWeight.Bold else FontWeight.Medium,
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 5.dp)
+                            )
+                        }
+
+                        // Batch Mode Option
+                        Surface(
+                            shape = RoundedCornerShape(11.dp),
+                            color = if (!cropAfterScan) ScannerGreen else Color.Transparent,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(11.dp))
+                                .clickable { viewModel.setCropAfterScan(false) }
+                        ) {
+                            Text(
+                                text = "Batch",
+                                color = if (!cropAfterScan) Color.White else Color.LightGray,
+                                fontSize = 11.sp,
+                                fontWeight = if (!cropAfterScan) FontWeight.Bold else FontWeight.Medium,
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 5.dp)
+                            )
                         }
                     }
                 }

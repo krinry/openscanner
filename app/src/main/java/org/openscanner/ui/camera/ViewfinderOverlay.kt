@@ -42,10 +42,51 @@ fun ViewfinderOverlay(
     idCardStep: Int = 1,
     stabilityState: StabilityState = StabilityState.SEARCHING,
     autoCaptureMode: Boolean = false,
+    levelerState: org.openscanner.camera.LevelerState = org.openscanner.camera.LevelerState(),
     modifier: Modifier = Modifier
 ) {
     Box(modifier = modifier.fillMaxSize()) {
         Canvas(modifier = Modifier.fillMaxSize()) {
+            // Horizon Leveler Reticle (OKEN Scanner SensorView clean-room implementation)
+            if (levelerState.isVisible) {
+                val center = Offset(size.width / 2f, size.height / 2f)
+                val reticleRadius = 24.dp.toPx()
+                val innerTargetRadius = 8.dp.toPx()
+                val bubbleRadius = 5.dp.toPx()
+
+                val isLvl = levelerState.isLevel
+                val reticleColor = if (isLvl) Color(0xFF00E676) else Color.White.copy(alpha = 0.35f)
+                val reticleStroke = Stroke(width = if (isLvl) 2.dp.toPx() else 1.2.dp.toPx())
+
+                // Outer guide circle
+                drawCircle(color = reticleColor, radius = reticleRadius, center = center, style = reticleStroke)
+                // Inner lock ring
+                drawCircle(color = reticleColor, radius = innerTargetRadius, center = center, style = Stroke(width = 1.dp.toPx()))
+
+                // 4 Crosshair tick marks
+                val tickLen = 6.dp.toPx()
+                drawLine(reticleColor, Offset(center.x - reticleRadius - tickLen, center.y), Offset(center.x - reticleRadius, center.y), strokeWidth = reticleStroke.width)
+                drawLine(reticleColor, Offset(center.x + reticleRadius, center.y), Offset(center.x + reticleRadius + tickLen, center.y), strokeWidth = reticleStroke.width)
+                drawLine(reticleColor, Offset(center.x, center.y - reticleRadius - tickLen), Offset(center.x, center.y - reticleRadius), strokeWidth = reticleStroke.width)
+                drawLine(reticleColor, Offset(center.x, center.y + reticleRadius), Offset(center.x, center.y + reticleRadius + tickLen), strokeWidth = reticleStroke.width)
+
+                // Moving level bubble
+                val maxBubbleDisplacement = reticleRadius - bubbleRadius - 1f
+                val bubbleOffset = if (isLvl) {
+                    center // Snap to dead center when level!
+                } else {
+                    val px = (levelerState.roll * 1.8f).coerceIn(-maxBubbleDisplacement, maxBubbleDisplacement)
+                    val py = (levelerState.pitch * 1.8f).coerceIn(-maxBubbleDisplacement, maxBubbleDisplacement)
+                    Offset(center.x + px, center.y + py)
+                }
+
+                drawCircle(
+                    color = if (isLvl) Color(0xFF00E676) else Color.White.copy(alpha = 0.85f),
+                    radius = bubbleRadius,
+                    center = bubbleOffset
+                )
+            }
+
             // Draw 3x3 Rule of Thirds Grid if enabled
             if (showGrid) {
                 val gridColor = Color.White.copy(alpha = 0.25f)
@@ -368,10 +409,15 @@ fun ViewfinderOverlay(
         } else if (mode == CaptureMode.DOCUMENT && quad != null) {
             val pillText = when (stabilityState) {
                 StabilityState.STEADY_LOCKED -> if (autoCaptureMode) "● AUTO CAPTURING..." else "READY • HOLD STEADY"
-                StabilityState.STABILIZING -> "ALIGNING DOCUMENT..."
+                StabilityState.MOVE_CLOSER -> "MOVE CLOSER TO DOCUMENT"
+                StabilityState.STABILIZING -> "HOLD STEADY"
                 StabilityState.SEARCHING -> "DOCUMENT DETECTED"
             }
-            val pillBorder = if (stabilityState == StabilityState.STEADY_LOCKED) Color(0xFF00E676) else ScannerGreen
+            val pillBorder = when (stabilityState) {
+                StabilityState.STEADY_LOCKED -> Color(0xFF00E676)
+                StabilityState.MOVE_CLOSER -> Color(0xFFFFB300)
+                else -> ScannerGreen
+            }
 
             Surface(
                 modifier = Modifier

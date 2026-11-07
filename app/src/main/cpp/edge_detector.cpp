@@ -471,6 +471,56 @@ static std::vector<Point2D> extractRadialEdgePoints(
     return pts;
 }
 
+// Refine corner junction using local structure tensor
+static Point2D refineCornerJunction(
+    const Point2D& pt,
+    const std::vector<int>& gx,
+    const std::vector<int>& gy,
+    const std::vector<int>& mag,
+    int w, int h,
+    int radius = 8
+) {
+    int cx = static_cast<int>(std::round(pt.x));
+    int cy = static_cast<int>(std::round(pt.y));
+
+    float bestResponse = -1.0f;
+    Point2D bestPt = pt;
+
+    for (int dy = -radius; dy <= radius; ++dy) {
+        int y = cy + dy;
+        if (y < 3 || y >= h - 3) continue;
+        for (int dx = -radius; dx <= radius; ++dx) {
+            int x = cx + dx;
+            if (x < 3 || x >= w - 3) continue;
+
+            float sxx = 0, syy = 0, sxy = 0;
+            for (int py = -1; py <= 1; ++py) {
+                for (int px = -1; px <= 1; ++px) {
+                    int idx = (y + py) * w + (x + px);
+                    float lx = static_cast<float>(gx[idx]);
+                    float ly = static_cast<float>(gy[idx]);
+                    sxx += lx * lx;
+                    syy += ly * ly;
+                    sxy += lx * ly;
+                }
+            }
+            float det = sxx * syy - sxy * sxy;
+            float trace = sxx + syy;
+            float harris = det - 0.04f * trace * trace;
+
+            float dist = std::sqrt(static_cast<float>(dx * dx + dy * dy));
+            float weight = 1.0f / (1.0f + 0.15f * dist);
+            float score = harris * weight;
+
+            if (score > bestResponse) {
+                bestResponse = score;
+                bestPt = {static_cast<float>(x), static_cast<float>(y)};
+            }
+        }
+    }
+    return bestPt;
+}
+
 } // namespace
 
 Quad detectDocumentBounds(const uint8_t* grayBuffer, int width, int height) {
@@ -638,6 +688,12 @@ Quad detectDocumentBounds(const uint8_t* grayBuffer, int width, int height) {
         return fallback;
     }
 
+    // Refine corner junctions with local structure tensor
+    bestQuad.topLeft = refineCornerJunction(bestQuad.topLeft, gx, gy, mag, sw, sh, 8);
+    bestQuad.topRight = refineCornerJunction(bestQuad.topRight, gx, gy, mag, sw, sh, 8);
+    bestQuad.bottomRight = refineCornerJunction(bestQuad.bottomRight, gx, gy, mag, sw, sh, 8);
+    bestQuad.bottomLeft = refineCornerJunction(bestQuad.bottomLeft, gx, gy, mag, sw, sh, 8);
+
     // 6. Scale coordinates back to full resolution
     float scaleX = static_cast<float>( downsample );
     float scaleY = static_cast<float>( downsample );
@@ -650,5 +706,76 @@ Quad detectDocumentBounds(const uint8_t* grayBuffer, int width, int height) {
     };
 
     return finalQuad;
+}
+
+Point2D snapPointToNearestEdge(
+    const uint32_t* argbPixels,
+    int width,
+    int height,
+    float ptX,
+    float ptY,
+    float searchRadius,
+    bool& outSnapped
+) {
+    outSnapped = false;
+    if (!argbPixels || width < 16 || height < 16) {
+        return {ptX, ptY};
+    }
+
+    int cx = static_cast<int>(std::round(ptX));
+    int cy = static_cast<int>(std::round(ptY));
+    int r = static_cast<int>(std::ceil(searchRadius));
+    r = std::max(4, std::min(r, 48));
+
+    int minX = std::max(2, cx - r);
+    int maxX = std::min(width - 3, cx + r);
+    int minY = std::max(2, cy - r);
+    int maxY = std::min(height - 3, cy + r);
+
+    if (minX >= maxX || minY >= maxY) {
+        return {ptX, ptY};
+    }
+
+    auto getLum = [&](int x, int y) -> int {
+        uint32_t c = argbPixels[y * width + x];
+        int red = (c >> 16) & 0xFF;
+        int green = (c >> 8) & 0xFF;
+        int blue = c & 0xFF;
+        return (red * 77 + green * 150 + blue * 29) >> 8;
+    };
+
+    float bestScore = -1.0f;
+    Point2D bestPt = {ptX, ptY};
+    const float rSq = searchRadius * searchRadius;
+
+    for (int y = minY; y <= maxY; ++y) {
+        float dy = y - ptY;
+        for (int x = minX; x <= maxX; ++x) {
+            float dx = x - ptX;
+            float dSq = dx * dx + dy * dy;
+            if (dSq > rSq) continue;
+
+            int gx = -getLum(x - 1, y - 1) + getLum(x + 1, y - 1)
+                     - 2 * getLum(x - 1, y)   + 2 * getLum(x + 1, y)
+                     - getLum(x - 1, y + 1) + getLum(x + 1, y + 1);
+
+            int gy = -getLum(x - 1, y - 1) - 2 * getLum(x, y - 1) - getLum(x + 1, y - 1)
+                     + getLum(x - 1, y + 1) + 2 * getLum(x, y + 1) + getLum(x + 1, y + 1);
+
+            float mag = std::sqrt(static_cast<float>(gx * gx + gy * gy));
+            if (mag < 32.0f) continue; // Noise floor
+
+            float dist = std::sqrt(dSq);
+            float score = mag / (1.0f + 0.12f * dist);
+
+            if (score > bestScore) {
+                bestScore = score;
+                bestPt = {static_cast<float>(x), static_cast<float>(y)};
+                outSnapped = true;
+            }
+        }
+    }
+
+    return bestPt;
 }
 

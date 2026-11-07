@@ -393,6 +393,28 @@ fun CropScreen(
                                 zoomScale = zoomScale,
                                 onTransform = { zRatio, pDelta ->
                                     updateTransform(zRatio, pDelta)
+                                },
+                                onSnapPoint = { rawPoint, searchRadiusPx ->
+                                    if (fitRect.width() > 0f && fitRect.height() > 0f && bmp.width > 0 && bmp.height > 0) {
+                                        val scaleBmpX = bmp.width.toFloat() / fitRect.width()
+                                        val scaleBmpY = bmp.height.toFloat() / fitRect.height()
+                                        val bmpX = (rawPoint.x - fitRect.left) * scaleBmpX
+                                        val bmpY = (rawPoint.y - fitRect.top) * scaleBmpY
+                                        val bmpRadius = searchRadiusPx * maxOf(scaleBmpX, scaleBmpY)
+
+                                        val (snappedBmpPt, didSnap) = org.openscanner.cv.NativeScannerEngine.snapPointToNearestEdge(
+                                            bmp, bmpX, bmpY, bmpRadius
+                                        )
+                                        if (didSnap) {
+                                            val screenX = fitRect.left + (snappedBmpPt.x / scaleBmpX)
+                                            val screenY = fitRect.top + (snappedBmpPt.y / scaleBmpY)
+                                            Pair(PointF(screenX, screenY), true)
+                                        } else {
+                                            Pair(rawPoint, false)
+                                        }
+                                    } else {
+                                        Pair(rawPoint, false)
+                                    }
                                 }
                             )
                         }

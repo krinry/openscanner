@@ -26,6 +26,15 @@ struct Quad {
 
 // C++ Algorithm prototypes for document processing pipeline
 Quad detectDocumentBounds(const uint8_t* grayBuffer, int width, int height);
+Point2D snapPointToNearestEdge(
+    const uint32_t* argbPixels,
+    int width,
+    int height,
+    float ptX,
+    float ptY,
+    float searchRadius,
+    bool& outSnapped
+);
 void warpPerspectiveNative(
     const uint32_t* srcPixels, int srcW, int srcH,
     uint32_t* dstPixels, int dstW, int dstH,

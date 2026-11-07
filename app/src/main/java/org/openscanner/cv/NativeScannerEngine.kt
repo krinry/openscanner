@@ -26,6 +26,22 @@ object NativeScannerEngine {
     private external fun warpPerspective(srcBitmap: Bitmap, dstBitmap: Bitmap, quadPoints: FloatArray)
     private external fun applyFilter(bitmap: Bitmap, filterMode: Int)
     private external fun adjustTones(bitmap: Bitmap, brightness: Int, contrast: Int)
+    private external fun snapPointInBitmap(bitmap: Bitmap, ptX: Float, ptY: Float, searchRadius: Float): FloatArray?
+
+    fun snapPointToNearestEdge(bitmap: Bitmap, ptX: Float, ptY: Float, searchRadius: Float): Pair<PointF, Boolean> {
+        if (isNativeLoaded) {
+            try {
+                val res = snapPointInBitmap(bitmap, ptX, ptY, searchRadius)
+                if (res != null && res.size >= 3) {
+                    val isSnapped = res[2] > 0.5f
+                    return Pair(PointF(res[0], res[1]), isSnapped)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error in native snapPointInBitmap", e)
+            }
+        }
+        return Pair(PointF(ptX, ptY), false)
+    }
 
     fun detectDocumentBounds(yuvData: ByteArray, width: Int, height: Int): DocumentQuadrilateral {
         if (isNativeLoaded) {
