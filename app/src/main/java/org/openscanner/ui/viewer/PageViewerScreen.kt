@@ -8,6 +8,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
@@ -17,8 +19,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material.icons.outlined.ZoomIn
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -26,7 +27,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
@@ -54,14 +57,14 @@ import org.openscanner.ui.viewer.dialogs.ViewerShareSheet
 import java.io.File
 
 /**
- * Universal High-performance Document Page Viewer with Butter-Smooth Horizontal Swiping & Zoom (like OKEN Scanner).
+ * Universal High-performance Document Page Viewer with Butter-Smooth Horizontal Swiping & Continuous Zoom.
  *
  * Capabilities:
  * - 100% Free horizontal swiping between all document pages with 16dp spacing.
- * - True 2-Finger Pinch-to-Zoom (from 1x up to 5x) without blocking 1-finger horizontal swipes!
- * - Double-tap to zoom (toggle 1x <-> 2.5x).
- * - 1-Finger Pan when zoomed in, with boundary bounds clamping.
- * - Floating Zoom HUD: Reset Pill ("2.5x | Reset") + Floating Quick Zoom Buttons (+ / -).
+ * - Fluid, high-speed 2-Finger Multi-Touch Pinch Zoom (1.0x to 5.0x) using native hardware calculateZoom.
+ * - Double-tap to toggle zoom (1.0x <-> 2.5x).
+ * - Bottom Zoom Scrubber Popup [Zoom 1.0x]: Click, hold & drag to smoothly resize zoom (like Collage Studio).
+ * - 1-Finger Pan when zoomed in, with viewport boundary clamping.
  * - Animated navigation chevrons on screen edges.
  * - Reuses unified [CropScreen] and [UniversalImageEditStudio] across the entire app.
  */
@@ -253,8 +256,8 @@ fun PageViewerScreen(
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        // 1. Double tap to toggle zoom 1x <-> 2.5x
-                        .pointerInput(isActivePage, scale) {
+                        // 1. Double tap to toggle zoom 1.0x <-> 2.5x (without restarting on scale updates)
+                        .pointerInput(isActivePage) {
                             if (!isActivePage) return@pointerInput
                             detectTapGestures(
                                 onDoubleTap = {
@@ -268,8 +271,8 @@ fun PageViewerScreen(
                                 }
                             )
                         }
-                        // 2. Multi-touch 2-Finger Pinch Zoom + 1-Finger Pan when zoomed in
-                        .pointerInput(isActivePage, scale) {
+                        // 2. High-speed Multi-touch 2-Finger Pinch Zoom + 1-Finger Pan when zoomed in
+                        .pointerInput(isActivePage) {
                             if (!isActivePage) return@pointerInput
                             awaitEachGesture {
                                 awaitFirstDown(requireUnconsumed = false)
@@ -278,33 +281,25 @@ fun PageViewerScreen(
                                     val pressedPointers = event.changes.filter { it.pressed }
 
                                     if (pressedPointers.size >= 2) {
-                                        // 2-Finger Pinch-to-Zoom
-                                        val p1 = pressedPointers[0].position
-                                        val p2 = pressedPointers[1].position
-                                        val prevP1 = pressedPointers[0].previousPosition
-                                        val prevP2 = pressedPointers[1].previousPosition
+                                        // 2-Finger Pinch-to-Zoom using native calculateZoom
+                                        val zoomDelta = event.calculateZoom()
+                                        val panDelta = event.calculatePan()
 
-                                        val currentDist = (p1 - p2).getDistance()
-                                        val prevDist = (prevP1 - prevP2).getDistance()
-
-                                        if (prevDist > 0f) {
-                                            val factor = currentDist / prevDist
-                                            val newScale = (scale * factor).coerceIn(1f, 5f)
+                                        if (zoomDelta != 1f) {
+                                            val newScale = (scale * zoomDelta).coerceIn(1.0f, 5.0f)
                                             scale = newScale
                                             if (newScale <= 1.05f) {
                                                 scale = 1f
                                                 offset = Offset.Zero
                                             } else {
-                                                val center = (p1 + p2) / 2f
-                                                val prevCenter = (prevP1 + prevP2) / 2f
-                                                offset = clampOffset(offset + (center - prevCenter), newScale, viewWidth, viewHeight)
+                                                offset = clampOffset(offset + panDelta, newScale, viewWidth, viewHeight)
                                             }
                                         }
                                         event.changes.forEach { it.consume() }
                                     } else if (pressedPointers.size == 1 && scale > 1.05f) {
                                         // 1-Finger Pan while zoomed in
                                         val change = pressedPointers[0]
-                                        val delta = change.position - change.previousPosition
+                                        val delta = change.positionChange()
                                         offset = clampOffset(offset + delta, scale, viewWidth, viewHeight)
                                         change.consume()
                                     }
@@ -387,7 +382,7 @@ fun PageViewerScreen(
                 }
             }
 
-            // Floating Reset Zoom Pill (appears when user is zoomed in)
+            // Floating Reset Zoom Pill (shown at top-right when user is zoomed in)
             if (scale > 1.05f) {
                 Surface(
                     shape = RoundedCornerShape(16.dp),
@@ -421,66 +416,18 @@ fun PageViewerScreen(
                 }
             }
 
-            // Floating Quick Zoom Action Buttons (+ and -) on the right side
-            Column(
+            // Bottom Floating Zoom Scrubber Pill right above the bottom navigation bar
+            // Click, hold & drag smoothly resizes zoom (like Collage Studio)
+            ViewerZoomScrubber(
+                scale = scale,
+                onScaleChange = { newScale ->
+                    scale = newScale
+                    offset = clampOffset(offset, newScale, viewWidth, viewHeight)
+                },
                 modifier = Modifier
-                    .align(Alignment.CenterEnd)
-                    .padding(end = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                // Zoom In (+) Button
-                Surface(
-                    color = Color.Black.copy(alpha = 0.65f),
-                    shape = CircleShape,
-                    border = BorderStroke(0.8.dp, Color(0xFF444444)),
-                    modifier = Modifier
-                        .size(38.dp)
-                        .clickable {
-                            val newScale = (scale * 1.35f).coerceIn(1f, 5f)
-                            scale = newScale
-                            offset = clampOffset(offset, newScale, viewWidth, viewHeight)
-                        }
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = Icons.Default.Add,
-                            contentDescription = "Zoom In",
-                            tint = Color.White,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                }
-
-                // Zoom Out (-) Button
-                if (scale > 1.05f) {
-                    Surface(
-                        color = Color.Black.copy(alpha = 0.65f),
-                        shape = CircleShape,
-                        border = BorderStroke(0.8.dp, Color(0xFF444444)),
-                        modifier = Modifier
-                            .size(38.dp)
-                            .clickable {
-                                val newScale = (scale / 1.35f).coerceIn(1f, 5f)
-                                if (newScale <= 1.05f) {
-                                    scale = 1f
-                                    offset = Offset.Zero
-                                } else {
-                                    scale = newScale
-                                    offset = clampOffset(offset, newScale, viewWidth, viewHeight)
-                                }
-                            }
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Icon(
-                                imageVector = Icons.Default.Remove,
-                                contentDescription = "Zoom Out",
-                                tint = Color.White,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
-                    }
-                }
-            }
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 12.dp)
+            )
         }
     }
 
@@ -538,5 +485,123 @@ fun PageViewerScreen(
             onPageDeleted = { refreshPages() },
             onTitleUpdated = { newTitle -> docTitle = newTitle }
         )
+    }
+}
+
+/**
+ * Click, hold & drag Zoom Scrubber pill placed above the bottom navigation bar.
+ * - Drag Up / Right = Increase zoom (+)
+ * - Drag Down / Left = Decrease zoom (-)
+ * - Tap to toggle between 1.0x and 2.5x
+ * - 1x reset chip when zoomed in
+ */
+@Composable
+private fun ViewerZoomScrubber(
+    scale: Float,
+    onScaleChange: (Float) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var isDragging by remember { mutableStateOf(false) }
+    val currentScale by rememberUpdatedState(scale)
+    val currentOnScaleChange by rememberUpdatedState(onScaleChange)
+
+    Surface(
+        shape = RoundedCornerShape(20.dp),
+        color = if (isDragging) Color(0xFF1E3326) else Color.Black.copy(alpha = 0.8f),
+        border = BorderStroke(
+            width = if (isDragging || scale > 1.05f) 1.5.dp else 1.dp,
+            color = if (isDragging || scale > 1.05f) ScannerGreen else Color(0xFF555555)
+        ),
+        shadowElevation = 8.dp,
+        modifier = modifier
+            .pointerInput(Unit) {
+                awaitPointerEventScope {
+                    while (true) {
+                        awaitFirstDown(requireUnconsumed = false)
+                        var accumulatedScale = currentScale
+                        var totalMovedX = 0f
+                        var totalMovedY = 0f
+                        var dragStarted = false
+
+                        while (true) {
+                            val event = awaitPointerEvent(PointerEventPass.Main)
+                            val pressed = event.changes.filter { it.pressed }
+                            if (pressed.isEmpty()) {
+                                if (dragStarted) {
+                                    isDragging = false
+                                } else {
+                                    // Tap toggles: if zoomed in reset to 1x, if 1x zoom to 2.5x
+                                    if (currentScale > 1.1f) {
+                                        currentOnScaleChange(1f)
+                                    } else {
+                                        currentOnScaleChange(2.5f)
+                                    }
+                                }
+                                break
+                            }
+
+                            val change = pressed[0].positionChange()
+                            totalMovedX += change.x
+                            totalMovedY += change.y
+
+                            if (!dragStarted && (kotlin.math.abs(totalMovedX) > 6f || kotlin.math.abs(totalMovedY) > 6f)) {
+                                dragStarted = true
+                                isDragging = true
+                            }
+
+                            if (dragStarted) {
+                                // Moving Up / Right increases scale (+), Down / Left decreases scale (-)
+                                val netChange = change.x - change.y
+                                val delta = (netChange / 100f)
+                                accumulatedScale = (accumulatedScale + delta).coerceIn(1.0f, 5.0f)
+                                if (accumulatedScale <= 1.05f) {
+                                    currentOnScaleChange(1.0f)
+                                } else {
+                                    currentOnScaleChange(accumulatedScale)
+                                }
+                                pressed[0].consume()
+                            }
+                        }
+                    }
+                }
+            }
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center,
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.ZoomIn,
+                contentDescription = null,
+                tint = if (scale > 1.05f) ScannerGreen else Color.White,
+                modifier = Modifier.size(17.dp)
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = "Zoom ${(scale * 10).toInt() / 10f}x",
+                color = if (scale > 1.05f) ScannerGreen else Color.White,
+                fontWeight = FontWeight.Bold,
+                fontSize = 13.sp
+            )
+            if (scale > 1.05f) {
+                Spacer(modifier = Modifier.width(8.dp))
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = Color(0xFF2A2A2A),
+                    modifier = Modifier.clickable {
+                        onScaleChange(1f)
+                    }
+                ) {
+                    Text(
+                        text = "1x",
+                        color = Color.White,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
+            }
+        }
     }
 }
