@@ -1,13 +1,16 @@
 package org.openscanner.cv
 
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
+import org.junit.Assert.*
 import org.junit.Test
 import kotlin.math.abs
+import kotlin.random.Random
 
 /**
- * Unit tests for IdCardCropper ISO/IEC 7810 ID-1 standard aspect ratio math
- * and CameraX FILL_CENTER screen-to-bitmap projection.
+ * Production unit tests for IdCardCropper:
+ * 1. ISO/IEC 7810 ID-1 standard aspect ratio math and viewport ratios
+ * 2. CameraX FILL_CENTER screen-to-bitmap projection
+ * 3. Boundary clamping, zero dimension fallbacks, and extreme aspect ratio stability
+ * 4. Property-based invariant fuzzing
  */
 class IdCardCropperTest {
 
@@ -32,19 +35,16 @@ class IdCardCropperTest {
         val rectW = rect.right - rect.left
         val rectH = rect.bottom - rect.top
 
-        // Verify crop rectangle coordinates are within bitmap bounds
         assertTrue("cropX >= 0", rect.left >= 0)
         assertTrue("cropY >= 0", rect.top >= 0)
         assertTrue("cropRight <= bitmapWidth", rect.right <= bitmapWidth)
         assertTrue("cropBottom <= bitmapHeight", rect.bottom <= bitmapHeight)
 
-        // Verify exact values calculated from CameraX FILL_CENTER projection
         assertEquals(735, rect.left)
         assertEquals(1517, rect.top)
         assertEquals(1530, rectW)
         assertEquals(964, rectH)
 
-        // Verify aspect ratio matches ID-1 within integer rounding
         val cropAspect = rectW.toFloat() / rectH.toFloat()
         assertTrue(abs(cropAspect - IdCardCropper.ID1_ASPECT_RATIO) < 0.01f)
     }
@@ -62,8 +62,8 @@ class IdCardCropperTest {
 
         assertTrue(rectW > 0)
         assertTrue(rectH > 0)
-        assertEquals(850, rectW) // 1000 * 0.85
-        assertEquals(536, rectH) // round(850 / 1.586) = 536
+        assertEquals(850, rectW)
+        assertEquals(536, rectH)
         assertTrue(rect.left >= 0)
         assertTrue(rect.top >= 0)
         assertTrue(rect.right <= 1000)
@@ -71,22 +71,54 @@ class IdCardCropperTest {
     }
 
     @Test
-    fun testCalculateCropRectClamping() {
-        // Extreme screen aspect ratio
-        val rect = IdCardCropper.calculateCropRect(
-            bitmapWidth = 1920,
-            bitmapHeight = 1080,
-            viewWidth = 5000,
-            viewHeight = 500
-        )
-        val rectW = rect.right - rect.left
-        val rectH = rect.bottom - rect.top
+    fun testExtremeScreenAspectRatiosMaintainBounds() {
+        data class ScreenCase(val bW: Int, val bH: Int, val vW: Int, val vH: Int)
 
-        assertTrue(rect.left >= 0)
-        assertTrue(rect.top >= 0)
-        assertTrue(rect.right <= 1920)
-        assertTrue(rect.bottom <= 1080)
-        assertTrue(rectW > 0)
-        assertTrue(rectH > 0)
+        val testConfigs = listOf(
+            ScreenCase(3000, 4000, 1080, 2400),
+            ScreenCase(4000, 3000, 2400, 1080),
+            ScreenCase(4000, 4000, 1080, 1080),
+            ScreenCase(1000, 4000, 3840, 1080),
+            ScreenCase(4000, 1000, 1080, 3840),
+            ScreenCase(100, 100, 2000, 2000),
+            ScreenCase(8000, 6000, 200, 200)
+        )
+
+        for ((bW, bH, vW, vH) in testConfigs) {
+            val rect = IdCardCropper.calculateCropRect(bW, bH, vW, vH)
+            val rectW = rect.right - rect.left
+            val rectH = rect.bottom - rect.top
+
+            assertTrue("Left bound >= 0 for ($bW, $bH, $vW, $vH): ${rect.left}", rect.left >= 0)
+            assertTrue("Top bound >= 0 for ($bW, $bH, $vW, $vH): ${rect.top}", rect.top >= 0)
+            assertTrue("Right bound <= bitmapWidth for ($bW, $bH, $vW, $vH): ${rect.right} <= $bW", rect.right <= bW)
+            assertTrue("Bottom bound <= bitmapHeight for ($bW, $bH, $vW, $vH): ${rect.bottom} <= $bH", rect.bottom <= bH)
+            assertTrue("Width > 0 for ($bW, $bH, $vW, $vH): $rectW", rectW > 0)
+            assertTrue("Height > 0 for ($bW, $bH, $vW, $vH): $rectH", rectH > 0)
+        }
+    }
+
+    @Test
+    fun testPropertyBasedFuzzingInvariants() {
+        val random = Random(42)
+        val iterations = 100
+
+        for (i in 0 until iterations) {
+            val bW = random.nextInt(10, 4000)
+            val bH = random.nextInt(10, 4000)
+            val vW = random.nextInt(50, 3000)
+            val vH = random.nextInt(50, 3000)
+
+            val rect = IdCardCropper.calculateCropRect(bW, bH, vW, vH)
+            val rectW = rect.right - rect.left
+            val rectH = rect.bottom - rect.top
+
+            assertTrue("left >= 0 [iter $i]", rect.left >= 0)
+            assertTrue("top >= 0 [iter $i]", rect.top >= 0)
+            assertTrue("right <= bW [iter $i]", rect.right <= bW)
+            assertTrue("bottom <= bH [iter $i]", rect.bottom <= bH)
+            assertTrue("rectW > 0 [iter $i]", rectW > 0)
+            assertTrue("rectH > 0 [iter $i]", rectH > 0)
+        }
     }
 }

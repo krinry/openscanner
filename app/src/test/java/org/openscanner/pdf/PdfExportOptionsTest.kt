@@ -2,14 +2,13 @@ package org.openscanner.pdf
 
 import com.tom_roush.pdfbox.pdmodel.common.PDRectangle
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Test
 
 /**
- * Tier 1 & Tier 2: Tests for PDF options, page sizes, quality presets, and export options.
+ * Production unit tests for PDF options, page sizes, and export configurations.
  */
-class PdfOptionsTest {
+class PdfExportOptionsTest {
 
     @Test
     fun testPdfPageSizeDefinitions() {

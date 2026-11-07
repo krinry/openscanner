@@ -11,9 +11,12 @@ import org.junit.Test
 import java.io.File
 
 /**
- * Tier 1, Tier 2, Tier 3: Contract tests for PDF generator error handling and encryption policies.
+ * Production unit tests for PdfGenerator:
+ * 1. Empty pages validation and error handling
+ * 2. StandardProtectionPolicy encryption security invariants
+ * 3. Margin calculations across page sizes
  */
-class PdfGeneratorContractTest {
+class PdfGeneratorTest {
 
     @Test
     fun testGeneratePdfFailsOnEmptyPages() = runTest {
@@ -48,7 +51,6 @@ class PdfGeneratorContractTest {
 
     @Test
     fun testMarginAndScalingCalculationsForPageSizes() {
-        // Standard margin is 18f unless FIT_IMAGE is selected
         fun getMargin(pageSize: PdfPageSize): Float {
             return if (pageSize == PdfPageSize.FIT_IMAGE) 0f else 18f
         }

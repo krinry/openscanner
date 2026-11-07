@@ -3,14 +3,17 @@ package org.openscanner.data.repository
 import android.content.Context
 import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertTrue
+import org.junit.Assert.*
 import org.junit.Before
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 import org.openscanner.data.local.DocumentDao
 import org.openscanner.data.local.FolderDao
 import org.openscanner.data.local.PageDao
@@ -18,12 +21,20 @@ import org.openscanner.data.model.Document
 import org.openscanner.data.model.Folder
 import org.openscanner.data.model.Page
 import java.io.File
+import java.io.IOException
 
 /**
- * Tier 1, Tier 2, Tier 3: Tests for ScannerRepository operations, page reordering,
- * document management, and ID card composite geometry.
+ * Production test suite for ScannerRepository:
+ * 1. Document CRUD, title generation, and batch updates
+ * 2. Folder CRUD, hierarchy path maintenance, and cycle prevention
+ * 3. Page reordering, consecutive index updates, and deletion
+ * 4. Deep-copy file rollback on DAO failure
+ * 5. ID Card compositing geometry and book spread page association
  */
 class ScannerRepositoryTest {
+
+    @get:Rule
+    val tempFolder = TemporaryFolder()
 
     private lateinit var context: Context
     private lateinit var documentDao: DocumentDao
@@ -34,11 +45,16 @@ class ScannerRepositoryTest {
     @Before
     fun setUp() {
         context = mockk(relaxed = true)
+        every { context.filesDir } returns tempFolder.root
         documentDao = mockk(relaxed = true)
         pageDao = mockk(relaxed = true)
         folderDao = mockk(relaxed = true)
         repository = ScannerRepository(context, documentDao, pageDao, folderDao)
     }
+
+    // =========================================================================
+    // SECTION 1: Document CRUD & Title Management
+    // =========================================================================
 
     @Test
     fun testCreateNewDocumentWithCustomTitle() = runTest {
@@ -65,15 +81,61 @@ class ScannerRepositoryTest {
     }
 
     @Test
-    fun testCreateAndRenameFolder() = runTest {
-        val folderSlot = slot<Folder>()
-        coEvery { folderDao.insertFolder(capture(folderSlot)) } returns 7L
-        coEvery { folderDao.getFolderById(7L) } returns Folder(id = 7L, name = "Drafts")
+    fun testUpdateDocumentTitle() = runTest {
+        val doc = Document(id = 10L, title = "Old Title")
+        coEvery { documentDao.getDocumentById(10L) } returns doc
 
-        val createdId = repository.createFolder("   Taxes   ", "#FF9800")
-        assertEquals(7L, createdId)
-        assertEquals("Taxes", folderSlot.captured.name)
-        assertEquals("#FF9800", folderSlot.captured.color)
+        repository.updateDocumentTitle(10L, "New Title")
+        coVerify(exactly = 1) {
+            documentDao.updateDocument(match { it.id == 10L && it.title == "New Title" })
+        }
+    }
+
+    @Test
+    fun testBatchMoveDocuments() = runTest {
+        val docIds = listOf(10L, 20L, 30L)
+        repository.batchMoveToFolder(docIds, 999L)
+        coVerify(exactly = 1) { documentDao.batchUpdateFolder(docIds, 999L) }
+    }
+
+    // =========================================================================
+    // SECTION 2: Folder CRUD, Hierarchy Paths & Cycle Prevention
+    // =========================================================================
+
+    @Test
+    fun testCreateRootFolderGeneratesRootPath() = runTest {
+        val folderSlot = slot<Folder>()
+        coEvery { folderDao.insertFolder(capture(folderSlot)) } returns 1L
+
+        val folderId = repository.createFolder("Work", parentFolderId = -1L, color = "#4CAF50")
+        assertEquals(1L, folderId)
+        assertTrue(folderSlot.isCaptured)
+        val created = folderSlot.captured
+        assertEquals("Work", created.name)
+        assertEquals(-1L, created.parentFolderId)
+        assertEquals("/", created.path)
+        assertEquals("#4CAF50", created.color)
+    }
+
+    @Test
+    fun testCreateSubfolderGeneratesHierarchicalPath() = runTest {
+        val parent = Folder(id = 5L, name = "Finance", parentFolderId = -1L, path = "/")
+        coEvery { folderDao.getFolderById(5L) } returns parent
+
+        val folderSlot = slot<Folder>()
+        coEvery { folderDao.insertFolder(capture(folderSlot)) } returns 15L
+
+        val subfolderId = repository.createFolder("Invoices", parentFolderId = 5L)
+        assertEquals(15L, subfolderId)
+        val created = folderSlot.captured
+        assertEquals("Invoices", created.name)
+        assertEquals(5L, created.parentFolderId)
+        assertEquals("/5/", created.path)
+    }
+
+    @Test
+    fun testRenameFolder() = runTest {
+        coEvery { folderDao.getFolderById(7L) } returns Folder(id = 7L, name = "Drafts")
 
         repository.renameFolder(7L, "   Final Taxes 2026   ")
         coVerify(exactly = 1) {
@@ -87,12 +149,43 @@ class ScannerRepositoryTest {
 
         repository.deleteFolder(folder)
 
-        // Verify unlinking before deleting folder
         coVerify(ordering = io.mockk.Ordering.ORDERED) {
             documentDao.unlinkDocumentsFromFolder(8L)
             folderDao.deleteFolder(folder)
         }
     }
+
+    @Test
+    fun testDirectSelfMoveDoesNotCreateCycle() = runTest {
+        val folder = Folder(id = 10L, name = "Self", parentFolderId = -1L, path = "/")
+        coEvery { folderDao.getFolderById(10L) } returns folder
+
+        // Attempting to move folder 10 into itself must return safely without DB update
+        repository.moveFolder(folderId = 10L, targetParentFolderId = 10L)
+        coVerify(exactly = 0) { folderDao.updateFolder(any()) }
+    }
+
+    @Test
+    fun testMoveFolderIntoDescendantThrowsIllegalArgumentException() = runTest {
+        val parent = Folder(id = 1L, name = "Parent", parentFolderId = -1L, path = "/")
+        val child = Folder(id = 2L, name = "Child", parentFolderId = 1L, path = "/1/")
+
+        coEvery { folderDao.getFolderById(1L) } returns parent
+        coEvery { folderDao.getFolderById(2L) } returns child
+
+        try {
+            repository.moveFolder(folderId = 1L, targetParentFolderId = 2L)
+            fail("Expected IllegalArgumentException when moving folder into its own descendant")
+        } catch (_: IllegalArgumentException) {
+            // Expected
+        }
+
+        coVerify(exactly = 0) { folderDao.updateFolder(any()) }
+    }
+
+    // =========================================================================
+    // SECTION 3: Page Operations & Reordering
+    // =========================================================================
 
     @Test
     fun testReorderPagesConsecutiveIndexAssignment() = runTest {
@@ -111,10 +204,8 @@ class ScannerRepositoryTest {
         assertEquals(3, updatedPages.size)
         assertEquals(0, updatedPages[0].pageIndex)
         assertEquals(1L, updatedPages[0].id)
-
         assertEquals(1, updatedPages[1].pageIndex)
         assertEquals(2L, updatedPages[1].id)
-
         assertEquals(2, updatedPages[2].pageIndex)
         assertEquals(3L, updatedPages[2].id)
 
@@ -145,9 +236,43 @@ class ScannerRepositoryTest {
         coVerify(exactly = 1) { documentDao.updatePageCount(docId, 1, any()) }
     }
 
+    // =========================================================================
+    // SECTION 4: Deep-Copy Rollback & File Cleanup
+    // =========================================================================
+
+    @Test
+    fun testCopyPageCleansUpOrphanedFileOnDaoFailure() = runTest {
+        val origFile = tempFolder.newFile("source_page.jpg").apply { writeText("PAGE_IMAGE_BYTES") }
+        val sourcePage = Page(
+            id = 101L,
+            documentId = 1L,
+            pageIndex = 0,
+            processedImagePath = origFile.absolutePath,
+            originalImagePath = origFile.absolutePath,
+            thumbnailPath = ""
+        )
+
+        coEvery { pageDao.insertPage(any()) } throws IOException("Disk IO or SQLite lock failure")
+
+        try {
+            repository.copyPagesToDocument(listOf(sourcePage), targetDocId = 2L)
+            fail("Expected IOException on DAO failure")
+        } catch (_: IOException) {
+            // Expected
+        }
+
+        // Verify that no orphaned copied files remain in filesDir
+        val filesInRoot = tempFolder.root.listFiles() ?: emptyArray()
+        val copies = filesInRoot.filter { it.name.contains("copy") || it.name.startsWith("page_") }
+        assertEquals("Orphaned copied files must be cleaned up on failure", 0, copies.size)
+    }
+
+    // =========================================================================
+    // SECTION 5: ID Card & Layout Math Invariants
+    // =========================================================================
+
     @Test
     fun testIdCardCompositingGeometryConstants() {
-        // Authoritative ISO/IEC 7810 ID-1 aspect ratio verification
         val a4Width = 2480
         val a4Height = 3508
 
@@ -163,15 +288,7 @@ class ScannerRepositoryTest {
         assertEquals(701, frontY)
         assertEquals(1964, backY)
 
-        // Verify cards do not overlap and fit completely within A4 height
         assertTrue(frontY + cardH < backY)
         assertTrue(backY + cardH < a4Height)
-    }
-
-    @Test
-    fun testBatchMoveDocuments() = runTest {
-        val docIds = listOf(10L, 20L, 30L)
-        repository.batchMoveToFolder(docIds, 999L)
-        coVerify(exactly = 1) { documentDao.batchUpdateFolder(docIds, 999L) }
     }
 }

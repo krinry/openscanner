@@ -6,8 +6,11 @@ import org.junit.Test
 import kotlin.math.abs
 
 /**
- * Tests for BookSpineDetector algorithmic math, vertical luminance projection,
- * Gaussian smoothing, valley profiling, and 1D cylindrical transformation LUTs.
+ * Production unit tests for BookSpineDetector:
+ * 1. Luminance projection formula and color weight compliance
+ * 2. Gaussian kernel physics and smoothing normalization
+ * 3. Spine valley isolation and distractor rejection
+ * 4. 1D Cylindrical unwarp LUT boundaries and curvature expansion
  */
 class BookSpineDetectorTest {
 
@@ -42,11 +45,26 @@ class BookSpineDetectorTest {
     }
 
     @Test
+    fun testGaussianKernelPhysics() {
+        val kernel = BookSpineDetector.GAUSSIAN_KERNEL_11
+        assertEquals(11, kernel.size)
+
+        // Energy conservation: sum of weights = 1.0
+        val sum = kernel.sum()
+        assertEquals(1.0f, sum, 1e-5f)
+
+        // Symmetry around center (index 5)
+        for (i in 0..5) {
+            assertEquals(kernel[i], kernel[10 - i], 1e-6f)
+        }
+    }
+
+    @Test
     fun testSpineValleyDetectionIdentifiesCreaseShadow() {
         val width = 320
-        val profile = FloatArray(width) { 220f } // Bright white pages
+        val profile = FloatArray(width) { 220f }
 
-        // Simulate dark crease shadow valley centered at x = 152 (47.5% spread)
+        // Simulate dark crease shadow valley centered at x = 152
         val valleyCenter = 152
         for (x in 130..174) {
             val dist = abs(x - valleyCenter)
@@ -60,11 +78,26 @@ class BookSpineDetectorTest {
     }
 
     @Test
+    fun testValleyDetectionIgnoresDistractorsOutsideSearchBand() {
+        val width = 320
+        val profile = FloatArray(width) { 220f }
+
+        // Margin shadows outside [0.35W, 0.65W]
+        for (x in 10..30) profile[x] = 10f
+        for (x in 290..310) profile[x] = 10f
+
+        val smoothed = BookSpineDetector.smoothProfile(profile)
+        val spine = BookSpineDetector.findValleySpineIndex(smoothed)
+
+        assertEquals(width / 2, spine)
+    }
+
+    @Test
     fun testSpineValleyFallbackWhenProfileIsFlat() {
         val width = 320
         val flatProfile = FloatArray(width) { 200f }
         val detected = BookSpineDetector.findValleySpineIndex(flatProfile)
-        assertEquals(160, detected) // Center fallback
+        assertEquals(160, detected)
     }
 
     @Test
@@ -73,17 +106,17 @@ class BookSpineDetectorTest {
 
         // Left Page: Spine at right (x = 999), Outer edge at left (x = 0)
         val (leftSrcX, leftGain) = BookSpineDetector.computeUnwarpLUT(width, isLeftPage = true)
-        assertEquals(0f, leftSrcX[0], 0.01f) // Outer edge invariant
-        assertEquals(999f, leftSrcX[999], 0.01f) // Spine invariant
-        assertTrue(leftGain[999] > 1.30f) // Crease shadow boost at spine
-        assertEquals(1.0f, leftGain[0], 0.001f) // No boost at outer edge
+        assertEquals(0f, leftSrcX[0], 0.01f)
+        assertEquals(999f, leftSrcX[999], 0.01f)
+        assertTrue(leftGain[999] > 1.30f)
+        assertEquals(1.0f, leftGain[0], 0.001f)
 
         // Right Page: Spine at left (x = 0), Outer edge at right (x = 999)
         val (rightSrcX, rightGain) = BookSpineDetector.computeUnwarpLUT(width, isLeftPage = false)
-        assertEquals(0f, rightSrcX[0], 0.01f) // Spine invariant
-        assertEquals(999f, rightSrcX[999], 0.01f) // Outer edge invariant
-        assertTrue(rightGain[0] > 1.30f) // Crease shadow boost at spine
-        assertEquals(1.0f, rightGain[999], 0.001f) // No boost at outer edge
+        assertEquals(0f, rightSrcX[0], 0.01f)
+        assertEquals(999f, rightSrcX[999], 0.01f)
+        assertTrue(rightGain[0] > 1.30f)
+        assertEquals(1.0f, rightGain[999], 0.001f)
     }
 
     @Test
@@ -91,11 +124,8 @@ class BookSpineDetectorTest {
         val width = 1000
         val (rightSrcX, _) = BookSpineDetector.computeUnwarpLUT(width, isLeftPage = false, gamma = 0.85f)
 
-        // Near spine at x = 100 (10% of width):
-        // In destination (unwarped), 100px from spine is mapped from compressed source:
-        // x_src = 1000 * (100 / 1000)^(1 / 0.85) = 1000 * 0.1^1.17647 ~= 66.6px
         val srcXAt100 = rightSrcX[100]
-        assertTrue(srcXAt100 < 100f) // Source coordinate is closer to spine
-        assertEquals(66.6f, srcXAt100, 2.0f) // Verified expansion ratio ~= 1.5x
+        assertTrue(srcXAt100 < 100f)
+        assertEquals(66.6f, srcXAt100, 2.0f)
     }
 }

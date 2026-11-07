@@ -1,23 +1,51 @@
 package org.openscanner.camera
 
 import android.content.Context
+import android.graphics.Bitmap
 import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.mockk
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.setMain
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 import org.openscanner.data.repository.ScannerRepository
 import org.openscanner.ui.camera.BatchCaptureItem
 import java.util.concurrent.atomic.AtomicInteger
 
+/**
+ * Production unit tests for BatchWarpProcessor:
+ * 1. Semaphore concurrency bounds (max 2 permits)
+ * 2. Automatic document creation when target document ID <= 0
+ * 3. Empty batch and edge-case handling
+ */
+@OptIn(ExperimentalCoroutinesApi::class)
 class BatchWarpProcessorTest {
+
+    private val testDispatcher = StandardTestDispatcher()
+
+    @Before
+    fun setUp() {
+        Dispatchers.setMain(testDispatcher)
+    }
+
+    @After
+    fun tearDown() {
+        Dispatchers.resetMain()
+    }
 
     @Test
     fun testSemaphoreLimitsConcurrencyToTwo() = runTest {
@@ -46,13 +74,26 @@ class BatchWarpProcessorTest {
     }
 
     @Test
-    fun testProcessorCreatesNewDocumentWhenDocIdIsZero() = runTest {
+    fun testProcessorReturnsTargetDocIdWhenEmpty() = runTest {
+        val context = mockk<Context>(relaxed = true)
+        val repository = mockk<ScannerRepository>(relaxed = true)
+        val processor = BatchWarpProcessor(context, repository)
+
+        val docId = processor.processBatch(targetDocId = -1L, items = emptyList())
+        assertEquals(-1L, docId)
+    }
+
+    @Test
+    fun testProcessorCreatesNewDocumentWhenTargetDocIdIsNegative() = runTest {
         val context = mockk<Context>(relaxed = true)
         val repository = mockk<ScannerRepository>(relaxed = true)
         coEvery { repository.createNewDocument(any(), any()) } returns 777L
 
         val processor = BatchWarpProcessor(context, repository)
-        val items = emptyList<BatchCaptureItem>()
+        val dummyBitmap = mockk<Bitmap>(relaxed = true)
+        val items = listOf(
+            BatchCaptureItem(id = 1L, rawFilePath = "/nonexistent/test.jpg", thumbnailBitmap = dummyBitmap)
+        )
 
         val docId = processor.processBatch(
             targetDocId = -1L,
@@ -60,7 +101,7 @@ class BatchWarpProcessorTest {
             onProgress = { _, _ -> }
         )
 
-        // When items are empty, targetDocId is returned directly or new document is preserved
-        assertEquals(-1L, docId)
+        assertEquals(777L, docId)
+        coVerify(exactly = 1) { repository.createNewDocument(any(), any()) }
     }
 }
