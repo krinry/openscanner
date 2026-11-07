@@ -7,11 +7,17 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.ClipOp
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -22,6 +28,18 @@ import org.openscanner.ui.theme.ScannerGreen
 import kotlin.math.abs
 import kotlin.math.hypot
 
+/**
+ * Interactive 8-handle Crop Quadrilateral Overlay.
+ *
+ * Implements the complete document crop box mechanics of OKEN Scanner / CamScanner:
+ * 1. Outside dimming: 52% dark translucent mask outside the quadrilateral polygon.
+ * 2. 8 Interactive Handles: 4 circular corner vertices + 4 directional edge midpoint pills.
+ * 3. OKEN Midpoint translation: Dragging an edge midpoint translates both adjacent vertices
+ *    together, preserving perspective tilt and document skew.
+ * 4. Center pan: Dragging inside the polygon translates the entire document bounding box.
+ * 5. Magnetic snap: Locks onto physical document edges, 90° orthogonal alignments, and image bounds.
+ * 6. Validity detection: Turns orange-red if the quad becomes self-intersecting or concave.
+ */
 @Composable
 fun DraggablePolygonOverlay(
     quad: DocumentQuadrilateral,
@@ -68,7 +86,7 @@ fun DraggablePolygonOverlay(
                     val midLeft = Offset((p4.x + p1.x) / 2f, (p4.y + p1.y) / 2f)
 
                     val handles = listOf(p1, p2, p3, p4, midTop, midRight, midBottom, midLeft)
-                    val touchRadius = (48.dp.toPx() / currentZoomScale.coerceAtLeast(1f)).coerceAtLeast(32.dp.toPx())
+                    val touchRadius = (42.dp.toPx() / currentZoomScale.coerceAtLeast(1f)).coerceAtLeast(30.dp.toPx())
 
                     val closest = handles.mapIndexed { index, pt ->
                         index to hypot(pt.x - down.position.x, pt.y - down.position.y)
@@ -81,7 +99,7 @@ fun DraggablePolygonOverlay(
                         currentOnTouchPoint(down.position)
                         currentOnHandleActive(handlePos, down.position, false)
                     } else {
-                        // Check if touch is inside the quadrilateral (to drag entire crop area)
+                        // Check if touch is inside the quadrilateral (to drag entire crop polygon)
                         val poly = listOf(p1, p2, p3, p4)
                         var inside = false
                         var j = poly.size - 1
@@ -246,66 +264,91 @@ fun DraggablePolygonOverlay(
                                     1 -> curQ.copy(topRight = magneticSnapCorner(PointF(curQ.topRight.x + dx, curQ.topRight.y + dy), 1))
                                     2 -> curQ.copy(bottomRight = magneticSnapCorner(PointF(curQ.bottomRight.x + dx, curQ.bottomRight.y + dy), 2))
                                     3 -> curQ.copy(bottomLeft = magneticSnapCorner(PointF(curQ.bottomLeft.x + dx, curQ.bottomLeft.y + dy), 3))
+                                    // Midpoint Top: Moves both Top-Left and Top-Right together by (dx, dy)
                                     4 -> {
-                                        var ny = curQ.topLeft.y + dy
-                                        if (abs(ny - b.top) < snapDist) { ny = b.top; isSnapped = true }
-                                        else if (!isSnapped) {
-                                            val midX = (curQ.topLeft.x + curQ.topRight.x) / 2f
-                                            currentOnSnapPoint?.invoke(PointF(midX, ny), snapDist)?.let { (snappedPt, didSnap) ->
-                                                if (didSnap) { ny = snappedPt.y; isSnapped = true }
+                                        var targetDy = dy
+                                        val midX = (curQ.topLeft.x + curQ.topRight.x) / 2f
+                                        val midY = (curQ.topLeft.y + curQ.topRight.y) / 2f + dy
+                                        if (abs(midY - b.top) < snapDist) {
+                                            targetDy = b.top - (curQ.topLeft.y + curQ.topRight.y) / 2f
+                                            isSnapped = true
+                                        } else {
+                                            currentOnSnapPoint?.invoke(PointF(midX, midY), snapDist)?.let { (snappedPt, didSnap) ->
+                                                if (didSnap) {
+                                                    targetDy = snappedPt.y - (curQ.topLeft.y + curQ.topRight.y) / 2f
+                                                    isSnapped = true
+                                                }
                                             }
                                         }
-                                        val cny = clampPt(0f, ny).y
                                         curQ.copy(
-                                            topLeft = PointF(curQ.topLeft.x, cny),
-                                            topRight = PointF(curQ.topRight.x, cny)
+                                            topLeft = clampPt(curQ.topLeft.x + dx, curQ.topLeft.y + targetDy),
+                                            topRight = clampPt(curQ.topRight.x + dx, curQ.topRight.y + targetDy)
                                         )
                                     }
+                                    // Midpoint Right: Moves both Top-Right and Bottom-Right together by (dx, dy)
                                     5 -> {
-                                        var nx = curQ.topRight.x + dx
-                                        if (abs(nx - b.right) < snapDist) { nx = b.right; isSnapped = true }
-                                        else if (!isSnapped) {
-                                            val midY = (curQ.topRight.y + curQ.bottomRight.y) / 2f
-                                            currentOnSnapPoint?.invoke(PointF(nx, midY), snapDist)?.let { (snappedPt, didSnap) ->
-                                                if (didSnap) { nx = snappedPt.x; isSnapped = true }
+                                        var targetDx = dx
+                                        val midX = (curQ.topRight.x + curQ.bottomRight.x) / 2f + dx
+                                        val midY = (curQ.topRight.y + curQ.bottomRight.y) / 2f
+                                        if (abs(midX - b.right) < snapDist) {
+                                            targetDx = b.right - (curQ.topRight.x + curQ.bottomRight.x) / 2f
+                                            isSnapped = true
+                                        } else {
+                                            currentOnSnapPoint?.invoke(PointF(midX, midY), snapDist)?.let { (snappedPt, didSnap) ->
+                                                if (didSnap) {
+                                                    targetDx = snappedPt.x - (curQ.topRight.x + curQ.bottomRight.x) / 2f
+                                                    isSnapped = true
+                                                }
                                             }
                                         }
-                                        val cnx = clampPt(nx, 0f).x
                                         curQ.copy(
-                                            topRight = PointF(cnx, curQ.topRight.y),
-                                            bottomRight = PointF(cnx, curQ.bottomRight.y)
+                                            topRight = clampPt(curQ.topRight.x + targetDx, curQ.topRight.y + dy),
+                                            bottomRight = clampPt(curQ.bottomRight.x + targetDx, curQ.bottomRight.y + dy)
                                         )
                                     }
+                                    // Midpoint Bottom: Moves both Bottom-Right and Bottom-Left together by (dx, dy)
                                     6 -> {
-                                        var ny = curQ.bottomLeft.y + dy
-                                        if (abs(ny - b.bottom) < snapDist) { ny = b.bottom; isSnapped = true }
-                                        else if (!isSnapped) {
-                                            val midX = (curQ.bottomLeft.x + curQ.bottomRight.x) / 2f
-                                            currentOnSnapPoint?.invoke(PointF(midX, ny), snapDist)?.let { (snappedPt, didSnap) ->
-                                                if (didSnap) { ny = snappedPt.y; isSnapped = true }
+                                        var targetDy = dy
+                                        val midX = (curQ.bottomLeft.x + curQ.bottomRight.x) / 2f
+                                        val midY = (curQ.bottomLeft.y + curQ.bottomRight.y) / 2f + dy
+                                        if (abs(midY - b.bottom) < snapDist) {
+                                            targetDy = b.bottom - (curQ.bottomLeft.y + curQ.bottomRight.y) / 2f
+                                            isSnapped = true
+                                        } else {
+                                            currentOnSnapPoint?.invoke(PointF(midX, midY), snapDist)?.let { (snappedPt, didSnap) ->
+                                                if (didSnap) {
+                                                    targetDy = snappedPt.y - (curQ.bottomLeft.y + curQ.bottomRight.y) / 2f
+                                                    isSnapped = true
+                                                }
                                             }
                                         }
-                                        val cny = clampPt(0f, ny).y
                                         curQ.copy(
-                                            bottomLeft = PointF(curQ.bottomLeft.x, cny),
-                                            bottomRight = PointF(curQ.bottomRight.x, cny)
+                                            bottomRight = clampPt(curQ.bottomRight.x + dx, curQ.bottomRight.y + targetDy),
+                                            bottomLeft = clampPt(curQ.bottomLeft.x + dx, curQ.bottomLeft.y + targetDy)
                                         )
                                     }
+                                    // Midpoint Left: Moves both Bottom-Left and Top-Left together by (dx, dy)
                                     7 -> {
-                                        var nx = curQ.topLeft.x + dx
-                                        if (abs(nx - b.left) < snapDist) { nx = b.left; isSnapped = true }
-                                        else if (!isSnapped) {
-                                            val midY = (curQ.topLeft.y + curQ.bottomLeft.y) / 2f
-                                            currentOnSnapPoint?.invoke(PointF(nx, midY), snapDist)?.let { (snappedPt, didSnap) ->
-                                                if (didSnap) { nx = snappedPt.x; isSnapped = true }
+                                        var targetDx = dx
+                                        val midX = (curQ.topLeft.x + curQ.bottomLeft.x) / 2f + dx
+                                        val midY = (curQ.topLeft.y + curQ.bottomLeft.y) / 2f
+                                        if (abs(midX - b.left) < snapDist) {
+                                            targetDx = b.left - (curQ.topLeft.x + curQ.bottomLeft.x) / 2f
+                                            isSnapped = true
+                                        } else {
+                                            currentOnSnapPoint?.invoke(PointF(midX, midY), snapDist)?.let { (snappedPt, didSnap) ->
+                                                if (didSnap) {
+                                                    targetDx = snappedPt.x - (curQ.topLeft.x + curQ.bottomLeft.x) / 2f
+                                                    isSnapped = true
+                                                }
                                             }
                                         }
-                                        val cnx = clampPt(nx, 0f).x
                                         curQ.copy(
-                                            topLeft = PointF(cnx, curQ.topLeft.y),
-                                            bottomLeft = PointF(cnx, curQ.bottomLeft.y)
+                                            topLeft = clampPt(curQ.topLeft.x + targetDx, curQ.topLeft.y + dy),
+                                            bottomLeft = clampPt(curQ.bottomLeft.x + targetDx, curQ.bottomLeft.y + dy)
                                         )
                                     }
+                                    // Body Pan: Moves entire quadrilateral
                                     8 -> {
                                         val minX = minOf(curQ.topLeft.x, curQ.topRight.x, curQ.bottomRight.x, curQ.bottomLeft.x)
                                         val maxX = maxOf(curQ.topLeft.x, curQ.topRight.x, curQ.bottomRight.x, curQ.bottomLeft.x)
@@ -334,7 +377,7 @@ fun DraggablePolygonOverlay(
                                     else -> curQ
                                 }
 
-                                // Haptic feedback on snap state transition
+                                // Haptic pulse feedback on snap state transition
                                 if (isSnapped && !wasSnapped) {
                                     haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                 }
@@ -395,20 +438,26 @@ fun DraggablePolygonOverlay(
             close()
         }
 
-        // Semi-transparent highlight over document area
+        val isValidGeometry = quad.isValidConvex()
+        val primaryColor = if (isValidGeometry) ScannerGreen else Color(0xFFFF9500)
+
+        // 1. Outside dimming: 52% translucent dark mask outside the document crop boundary
+        clipPath(path, clipOp = ClipOp.Difference) {
+            drawRect(Color.Black.copy(alpha = 0.52f))
+        }
+
+        // 2. High-contrast document boundary stroke
         drawPath(
             path = path,
-            color = ScannerGreen.copy(alpha = 0.07f)
+            color = primaryColor.copy(alpha = 0.95f),
+            style = Stroke(
+                width = 2.4.dp.toPx(),
+                cap = StrokeCap.Round,
+                join = StrokeJoin.Round
+            )
         )
 
-        // Boundary lines in signature emerald green
-        drawPath(
-            path = path,
-            color = ScannerGreen.copy(alpha = 0.8f),
-            style = Stroke(width = 2.2.dp.toPx())
-        )
-
-        // Draw magnetic alignment guide lines if active
+        // 3. Draw magnetic alignment guide lines if active
         if (magneticGuideLines.isNotEmpty()) {
             val dashEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 8f), 0f)
             magneticGuideLines.forEach { (start, end) ->
@@ -422,8 +471,9 @@ fun DraggablePolygonOverlay(
             }
         }
 
-        // 4 Corner circular handles with white core and green/cyan border
+        // 4. 4 Corner circular handles with white disc, green core, and center dot
         val cornerRadius = 14.dp.toPx()
+        val cornerInnerRadius = 6.5.dp.toPx()
         listOf(
             0 to p1,
             1 to p2,
@@ -431,36 +481,125 @@ fun DraggablePolygonOverlay(
             3 to p4
         ).forEach { (idx, pt) ->
             val isCurrentActive = (activeHandleIndex == idx)
-            val ringColor = if (isCurrentActive && wasSnapped) Color(0xFF00E5FF) else ScannerGreen
+            val ringColor = if (isCurrentActive && wasSnapped) Color(0xFF00E5FF) else primaryColor
 
-            drawCircle(Color.White.copy(alpha = 0.95f), radius = cornerRadius, center = pt)
-            drawCircle(ringColor.copy(alpha = 0.90f), radius = cornerRadius, center = pt, style = Stroke(3.dp.toPx()))
-            drawCircle(ringColor, radius = 4.dp.toPx(), center = pt)
+            // Drop shadow simulation
+            drawCircle(Color.Black.copy(alpha = 0.35f), radius = cornerRadius + 1.5.dp.toPx(), center = Offset(pt.x, pt.y + 1.dp.toPx()))
+            // Outer white solid circle
+            drawCircle(Color.White, radius = cornerRadius, center = pt)
+            // Inner color circle
+            drawCircle(ringColor, radius = cornerInnerRadius, center = pt)
+            // Center white dot
+            drawCircle(Color.White, radius = 2.dp.toPx(), center = pt)
 
             if (isCurrentActive && wasSnapped) {
-                // Subtle glowing magnetic pulse ring
-                drawCircle(Color(0xFF00E5FF).copy(alpha = 0.35f), radius = cornerRadius + 6.dp.toPx(), center = pt, style = Stroke(2.dp.toPx()))
+                // Glowing magnetic lock pulse ring
+                drawCircle(Color(0xFF00E5FF).copy(alpha = 0.35f), radius = cornerRadius + 6.dp.toPx(), center = pt, style = Stroke(2.5.dp.toPx()))
             }
         }
 
-        // 4 Edge midpoint pill handles
-        val midRadius = 8.dp.toPx()
+        // 5. 4 Directional Edge Midpoint Pills (Horizontal for top/bottom, Vertical for left/right)
         val midTop = Offset((p1.x + p2.x) / 2f, (p1.y + p2.y) / 2f)
         val midRight = Offset((p2.x + p3.x) / 2f, (p2.y + p3.y) / 2f)
         val midBottom = Offset((p3.x + p4.x) / 2f, (p3.y + p4.y) / 2f)
         val midLeft = Offset((p4.x + p1.x) / 2f, (p4.y + p1.y) / 2f)
 
-        listOf(
-            4 to midTop,
-            5 to midRight,
-            6 to midBottom,
-            7 to midLeft
-        ).forEach { (idx, pt) ->
-            val isCurrentActive = (activeHandleIndex == idx)
-            val ringColor = if (isCurrentActive && wasSnapped) Color(0xFF00E5FF) else ScannerGreen
+        val pillLong = 22.dp.toPx()
+        val pillShort = 9.dp.toPx()
+        val pillRadius = CornerRadius(pillShort / 2f, pillShort / 2f)
 
-            drawCircle(Color.White.copy(alpha = 0.9f), radius = midRadius, center = pt)
-            drawCircle(ringColor.copy(alpha = 0.85f), radius = midRadius, center = pt, style = Stroke(2.dp.toPx()))
-        }
+        // Midpoint 4: Top (Horizontal pill)
+        drawPillHandle(
+            center = midTop,
+            size = Size(pillLong, pillShort),
+            cornerRadius = pillRadius,
+            isActive = (activeHandleIndex == 4),
+            isSnapped = wasSnapped,
+            primaryColor = primaryColor
+        )
+
+        // Midpoint 5: Right (Vertical pill)
+        drawPillHandle(
+            center = midRight,
+            size = Size(pillShort, pillLong),
+            cornerRadius = pillRadius,
+            isActive = (activeHandleIndex == 5),
+            isSnapped = wasSnapped,
+            primaryColor = primaryColor
+        )
+
+        // Midpoint 6: Bottom (Horizontal pill)
+        drawPillHandle(
+            center = midBottom,
+            size = Size(pillLong, pillShort),
+            cornerRadius = pillRadius,
+            isActive = (activeHandleIndex == 6),
+            isSnapped = wasSnapped,
+            primaryColor = primaryColor
+        )
+
+        // Midpoint 7: Left (Vertical pill)
+        drawPillHandle(
+            center = midLeft,
+            size = Size(pillShort, pillLong),
+            cornerRadius = pillRadius,
+            isActive = (activeHandleIndex == 7),
+            isSnapped = wasSnapped,
+            primaryColor = primaryColor
+        )
+    }
+}
+
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawPillHandle(
+    center: Offset,
+    size: Size,
+    cornerRadius: CornerRadius,
+    isActive: Boolean,
+    isSnapped: Boolean,
+    primaryColor: Color
+) {
+    val topLeft = Offset(center.x - size.width / 2f, center.y - size.height / 2f)
+    val ringColor = if (isActive && isSnapped) Color(0xFF00E5FF) else primaryColor
+
+    // Shadow
+    drawRoundRect(
+        color = Color.Black.copy(alpha = 0.35f),
+        topLeft = Offset(topLeft.x, topLeft.y + 1.dp.toPx()),
+        size = size,
+        cornerRadius = cornerRadius
+    )
+    // White background
+    drawRoundRect(
+        color = Color.White,
+        topLeft = topLeft,
+        size = size,
+        cornerRadius = cornerRadius
+    )
+    // Colored border
+    drawRoundRect(
+        color = ringColor,
+        topLeft = topLeft,
+        size = size,
+        cornerRadius = cornerRadius,
+        style = Stroke(width = 1.6.dp.toPx())
+    )
+    // Small center accent bar/dot
+    val isHorizontal = size.width > size.height
+    if (isHorizontal) {
+        drawLine(
+            color = ringColor,
+            start = Offset(center.x - 4.dp.toPx(), center.y),
+            end = Offset(center.x + 4.dp.toPx(), center.y),
+            strokeWidth = 2.dp.toPx(),
+            cap = StrokeCap.Round
+        )
+    } else {
+        drawLine(
+            color = ringColor,
+            start = Offset(center.x, center.y - 4.dp.toPx()),
+            end = Offset(center.x, center.y + 4.dp.toPx()),
+            strokeWidth = 2.dp.toPx(),
+            cap = StrokeCap.Round
+        )
     }
 }

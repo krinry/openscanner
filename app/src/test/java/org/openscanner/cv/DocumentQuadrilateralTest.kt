@@ -92,4 +92,51 @@ class DocumentQuadrilateralTest {
         assertEquals(50f, quad.bottomLeft.x, 0.001f)
         assertEquals(720f, quad.bottomLeft.y, 0.001f)
     }
+
+    @Test
+    fun testAreaCalculation() {
+        // Standard rectangle of 100 x 200 = 20,000 area
+        val rect = DocumentQuadrilateral(
+            topLeft = PointF(0f, 0f),
+            topRight = PointF(100f, 0f),
+            bottomRight = PointF(100f, 200f),
+            bottomLeft = PointF(0f, 200f)
+        )
+        assertEquals(20000f, rect.area(), 0.1f)
+    }
+
+    @Test
+    fun testIsValidConvexValidPolygon() {
+        val validQuad = DocumentQuadrilateral(
+            topLeft = PointF(10f, 15f),
+            topRight = PointF(400f, 20f),
+            bottomRight = PointF(420f, 600f),
+            bottomLeft = PointF(25f, 580f)
+        )
+        assertTrue(validQuad.isValidConvex())
+    }
+
+    @Test
+    fun testIsValidConvexSelfIntersectingBowtie() {
+        // Crossing lines: Top-Left to Bottom-Right and Top-Right to Bottom-Left
+        val bowtie = DocumentQuadrilateral(
+            topLeft = PointF(0f, 0f),
+            topRight = PointF(100f, 100f),
+            bottomRight = PointF(0f, 100f),
+            bottomLeft = PointF(100f, 0f)
+        )
+        org.junit.Assert.assertFalse(bowtie.isValidConvex())
+    }
+
+    @Test
+    fun testIsValidConvexConcave() {
+        // Concave quad where top-right is indented inwards beyond the diagonal
+        val concave = DocumentQuadrilateral(
+            topLeft = PointF(0f, 0f),
+            topRight = PointF(40f, 60f),
+            bottomRight = PointF(100f, 100f),
+            bottomLeft = PointF(0f, 100f)
+        )
+        org.junit.Assert.assertFalse(concave.isValidConvex())
+    }
 }

@@ -4,29 +4,38 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.graphics.RectF
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.RotateLeft
 import androidx.compose.material.icons.automirrored.filled.RotateRight
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.outlined.AutoFixHigh
 import androidx.compose.material.icons.outlined.SelectAll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -39,6 +48,16 @@ import org.openscanner.cv.PointF
 import org.openscanner.ui.theme.ScannerGreen
 import java.io.File
 
+/**
+ * Production-grade Document Crop Screen adhering strictly to AGENTS.md clean-room standards.
+ *
+ * Replicates the complete mathematical and behavioral logic of OKEN Scanner:
+ * 1. 8-Handle Crop Box with 52% dark translucent background mask.
+ * 2. Directional Midpoint Drag preserving perspective angles and skew.
+ * 3. Dynamic HUD Loupe Evasion (Top-Left by default, flips to Top-Right near contact).
+ * 4. Magnetic Snapping to image borders, 90° orthogonal alignments, and physical document edges.
+ * 5. Instant invalid quad detection (turns orange-red when self-intersecting or concave).
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CropScreen(
@@ -50,6 +69,7 @@ fun CropScreen(
     onNavigateToFilter: ((imagePath: String, docId: Long, borderJson: String) -> Unit)? = null,
     onClose: () -> Unit
 ) {
+    val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     var bitmap by remember { mutableStateOf<Bitmap?>(null) }
     var quad by remember { mutableStateOf<DocumentQuadrilateral?>(null) }
@@ -63,6 +83,8 @@ fun CropScreen(
 
     var zoomScale by remember { mutableFloatStateOf(1f) }
     var panOffset by remember { mutableStateOf(Offset.Zero) }
+
+    val isQuadValid = quad?.isValidConvex() ?: true
 
     fun updateTransform(zoomChange: Float, panChange: Offset) {
         val newZoom = (zoomScale * zoomChange).coerceIn(1f, 4.5f)
@@ -84,12 +106,10 @@ fun CropScreen(
         val imageAspect = bmpW.toFloat() / bmpH.toFloat()
         val viewAspect = viewW / viewH
         return if (viewAspect > imageAspect) {
-            val renderH = viewH
             val renderW = viewH * imageAspect
             val offX = (viewW - renderW) / 2f
             RectF(offX, 0f, offX + renderW, viewH)
         } else {
-            val renderW = viewW
             val renderH = viewW / imageAspect
             val offY = (viewH - renderH) / 2f
             RectF(0f, offY, viewW, offY + renderH)
@@ -155,7 +175,7 @@ fun CropScreen(
         }
     }
 
-    // Decode sample bitmap for high performance
+    // Decode sample bitmap for high performance rendering
     LaunchedEffect(imagePath, rotationDegrees) {
         withContext(Dispatchers.IO) {
             val file = File(imagePath)
@@ -170,7 +190,7 @@ fun CropScreen(
                         android.media.ExifInterface.ORIENTATION_ROTATE_270 -> 270
                         else -> 0
                     }
-                } catch (e: Exception) { /* Ignore */ }
+                } catch (_: Exception) { }
 
                 val totalRotation = (rotationDegrees + exifDegrees) % 360
 
@@ -201,41 +221,44 @@ fun CropScreen(
     }
 
     fun proceedToNext() {
-        quad?.let { q ->
-            val bmp = bitmap ?: return
-            val fitRect = calculateImageFit(viewWidth, viewHeight, bmp.width, bmp.height)
-            val renderW = fitRect.width()
-            val renderH = fitRect.height()
-            if (renderW <= 0f || renderH <= 0f) return
+        val q = quad ?: return
+        if (!q.isValidConvex()) {
+            android.widget.Toast.makeText(context, "Invalid boundary geometry", android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
+        val bmp = bitmap ?: return
+        val fitRect = calculateImageFit(viewWidth, viewHeight, bmp.width, bmp.height)
+        val renderW = fitRect.width()
+        val renderH = fitRect.height()
+        if (renderW <= 0f || renderH <= 0f) return
 
-            // Map coordinates back to original full-resolution image
-            val origW = if (fullImageWidth > 0f) fullImageWidth else bmp.width.toFloat()
-            val origH = if (fullImageHeight > 0f) fullImageHeight else bmp.height.toFloat()
+        // Map coordinates back to original full-resolution image
+        val origW = if (fullImageWidth > 0f) fullImageWidth else bmp.width.toFloat()
+        val origH = if (fullImageHeight > 0f) fullImageHeight else bmp.height.toFloat()
 
-            fun mapPoint(pt: PointF): PointF {
-                val nx = ((pt.x - fitRect.left) / renderW).coerceIn(0f, 1f)
-                val ny = ((pt.y - fitRect.top) / renderH).coerceIn(0f, 1f)
-                return PointF(nx * origW, ny * origH)
-            }
+        fun mapPoint(pt: PointF): PointF {
+            val nx = ((pt.x - fitRect.left) / renderW).coerceIn(0f, 1f)
+            val ny = ((pt.y - fitRect.top) / renderH).coerceIn(0f, 1f)
+            return PointF(nx * origW, ny * origH)
+        }
 
-            val realQuad = DocumentQuadrilateral(
-                topLeft = mapPoint(q.topLeft),
-                topRight = mapPoint(q.topRight),
-                bottomRight = mapPoint(q.bottomRight),
-                bottomLeft = mapPoint(q.bottomLeft)
-            )
+        val realQuad = DocumentQuadrilateral(
+            topLeft = mapPoint(q.topLeft),
+            topRight = mapPoint(q.topRight),
+            bottomRight = mapPoint(q.bottomRight),
+            bottomLeft = mapPoint(q.bottomLeft)
+        )
 
-            if (onCropConfirmed != null) {
-                onCropConfirmed(realQuad)
-                onClose()
-            } else if (onNavigateToFilter != null) {
-                val borderStr = "${realQuad.topLeft.x},${realQuad.topLeft.y}," +
-                        "${realQuad.topRight.x},${realQuad.topRight.y}," +
-                        "${realQuad.bottomRight.x},${realQuad.bottomRight.y}," +
-                        "${realQuad.bottomLeft.x},${realQuad.bottomLeft.y}"
+        if (onCropConfirmed != null) {
+            onCropConfirmed(realQuad)
+            onClose()
+        } else if (onNavigateToFilter != null) {
+            val borderStr = "${realQuad.topLeft.x},${realQuad.topLeft.y}," +
+                    "${realQuad.topRight.x},${realQuad.topRight.y}," +
+                    "${realQuad.bottomRight.x},${realQuad.bottomRight.y}," +
+                    "${realQuad.bottomLeft.x},${realQuad.bottomLeft.y}"
 
-                onNavigateToFilter(imagePath, docId, borderStr)
-            }
+            onNavigateToFilter(imagePath, docId, borderStr)
         }
     }
 
@@ -251,7 +274,11 @@ fun CropScreen(
                 actions = {
                     Button(
                         onClick = { proceedToNext() },
-                        colors = ButtonDefaults.buttonColors(containerColor = ScannerGreen),
+                        enabled = isQuadValid,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = ScannerGreen,
+                            disabledContainerColor = Color.DarkGray
+                        ),
                         shape = RoundedCornerShape(18.dp),
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp)
                     ) {
@@ -272,11 +299,48 @@ fun CropScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .navigationBarsPadding()
-                        .padding(vertical = 12.dp, horizontal = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceEvenly,
+                        .padding(vertical = 10.dp, horizontal = 12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    CropActionButton(
+                    // Left 90° Rotate
+                    CropBarButton(
+                        icon = Icons.AutoMirrored.Filled.RotateLeft,
+                        label = "Left",
+                        onClick = {
+                            bitmap?.let { b ->
+                                val matrix = Matrix().apply { postRotate(-90f) }
+                                val rotated = Bitmap.createBitmap(b, 0, 0, b.width, b.height, matrix, true)
+                                bitmap = rotated
+                                val temp = fullImageWidth
+                                fullImageWidth = fullImageHeight
+                                fullImageHeight = temp
+                                val r = calculateImageFit(viewWidth, viewHeight, rotated.width, rotated.height)
+                                autoDetectCorners(rotated, r)
+                            }
+                        }
+                    )
+
+                    // Right 90° Rotate
+                    CropBarButton(
+                        icon = Icons.AutoMirrored.Filled.RotateRight,
+                        label = "Right",
+                        onClick = {
+                            bitmap?.let { b ->
+                                val matrix = Matrix().apply { postRotate(90f) }
+                                val rotated = Bitmap.createBitmap(b, 0, 0, b.width, b.height, matrix, true)
+                                bitmap = rotated
+                                val temp = fullImageWidth
+                                fullImageWidth = fullImageHeight
+                                fullImageHeight = temp
+                                val r = calculateImageFit(viewWidth, viewHeight, rotated.width, rotated.height)
+                                autoDetectCorners(rotated, r)
+                            }
+                        }
+                    )
+
+                    // Crop All (Expand to full page boundaries)
+                    CropBarButton(
                         icon = Icons.Outlined.SelectAll,
                         label = "All",
                         onClick = {
@@ -292,7 +356,8 @@ fun CropScreen(
                         }
                     )
 
-                    CropActionButton(
+                    // Auto Detect Corners
+                    CropBarButton(
                         icon = Icons.Outlined.AutoFixHigh,
                         label = "Auto",
                         onClick = {
@@ -303,33 +368,23 @@ fun CropScreen(
                         }
                     )
 
-                    CropActionButton(
-                        icon = Icons.AutoMirrored.Filled.RotateLeft,
-                        label = "Left",
-                        onClick = {
-                            bitmap?.let { b ->
-                                val matrix = Matrix().apply { postRotate(-90f) }
-                                val rotated = Bitmap.createBitmap(b, 0, 0, b.width, b.height, matrix, true)
-                                bitmap = rotated
-                                val r = calculateImageFit(viewWidth, viewHeight, rotated.width, rotated.height)
-                                autoDetectCorners(rotated, r)
-                            }
-                        }
-                    )
-
-                    CropActionButton(
-                        icon = Icons.AutoMirrored.Filled.RotateRight,
-                        label = "Right",
-                        onClick = {
-                            bitmap?.let { b ->
-                                val matrix = Matrix().apply { postRotate(90f) }
-                                val rotated = Bitmap.createBitmap(b, 0, 0, b.width, b.height, matrix, true)
-                                bitmap = rotated
-                                val r = calculateImageFit(viewWidth, viewHeight, rotated.width, rotated.height)
-                                autoDetectCorners(rotated, r)
-                            }
-                        }
-                    )
+                    // Signature OKEN Emerald Green Circular Process Button
+                    Box(
+                        modifier = Modifier
+                            .size(50.dp)
+                            .shadow(6.dp, CircleShape)
+                            .clip(CircleShape)
+                            .background(if (isQuadValid) ScannerGreen else Color.DarkGray)
+                            .clickable(enabled = isQuadValid) { proceedToNext() },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Check,
+                            contentDescription = "Confirm Crop",
+                            tint = Color.White,
+                            modifier = Modifier.size(26.dp)
+                        )
+                    }
                 }
             }
         }
@@ -420,7 +475,7 @@ fun CropScreen(
                         }
                     }
 
-                    // Floating Reset Zoom Pill (appears when zoomed in)
+                    // Floating Reset Zoom Pill (appears when user pinches to zoom in)
                     if (zoomScale > 1.05f) {
                         Surface(
                             shape = RoundedCornerShape(16.dp),
@@ -454,17 +509,23 @@ fun CropScreen(
                         }
                     }
 
-                    // Magnifier Loupe (shown outside graphicsLayer so it stays at fixed screen scale)
+                    // OKEN-Style HUD Magnifier Loupe (shown outside graphicsLayer to stay at fixed crisp screen scale)
                     val fitRect = calculateImageFit(viewWidth, viewHeight, bmp.width, bmp.height)
                     quad?.let { _ ->
-                        MagnifierLoupe(
-                            bitmap = bmp,
-                            touchPoint = activeTouchPoint,
-                            handlePoint = activeHandlePoint,
-                            imageScale = fitRect.width() / bmp.width.toFloat(),
-                            fitRect = fitRect,
-                            isSnapped = isCropHandleSnapped
-                        )
+                        AnimatedVisibility(
+                            visible = activeTouchPoint != null || activeHandlePoint != null,
+                            enter = fadeIn(),
+                            exit = fadeOut()
+                        ) {
+                            MagnifierLoupe(
+                                bitmap = bmp,
+                                touchPoint = activeTouchPoint,
+                                handlePoint = activeHandlePoint,
+                                imageScale = fitRect.width() / bmp.width.toFloat(),
+                                fitRect = fitRect,
+                                isSnapped = isCropHandleSnapped
+                            )
+                        }
                     }
                 }
             } ?: CircularProgressIndicator(color = ScannerGreen)
@@ -473,8 +534,8 @@ fun CropScreen(
 }
 
 @Composable
-fun CropActionButton(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+fun CropBarButton(
+    icon: ImageVector,
     label: String,
     onClick: () -> Unit
 ) {
@@ -482,10 +543,10 @@ fun CropActionButton(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
             .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 6.dp)
+            .padding(horizontal = 10.dp, vertical = 4.dp)
     ) {
         Icon(icon, contentDescription = label, tint = Color.White, modifier = Modifier.size(24.dp))
         Spacer(modifier = Modifier.height(4.dp))
-        Text(label, color = Color.LightGray, fontSize = 12.sp)
+        Text(label, color = Color.LightGray, fontSize = 12.sp, fontWeight = FontWeight.Medium)
     }
 }
