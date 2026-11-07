@@ -328,7 +328,7 @@ static float scoreQuadEdgeSupport(
     }
 
     float coverage = static_cast<float>(validEdgeHits) / std::max(1, totalSamples);
-    if (coverage < 0.20f) return -1.0f; // Accept candidates with at least 20% clear edge hits
+    if (coverage < 0.10f) return -1.0f; // Accept candidates with at least 10% clear edge hits
 
     float borderRatio = static_cast<float>(borderPenaltyHits) / std::max(1, totalSamples);
     if (borderRatio > 0.50f) return -1.0f; // Reject full-frame border false positives
@@ -359,9 +359,9 @@ static std::vector<Point2D> extractCentralBlobBoundary(
     std::vector<int> bestComponent;
     bestComponent.reserve(w * h / 2);
 
-    // Search seeds in the central 40% of the frame
-    int x0 = w * 3 / 10, x1 = w * 7 / 10;
-    int y0 = h * 3 / 10, y1 = h * 7 / 10;
+    // Search seeds in the central 60% of the frame to capture off-center pages
+    int x0 = w * 2 / 10, x1 = w * 8 / 10;
+    int y0 = h * 2 / 10, y1 = h * 8 / 10;
 
     std::queue<int> q;
     std::vector<int> currentComp;
@@ -543,7 +543,7 @@ Quad detectDocumentBounds(const uint8_t* grayBuffer, int width, int height) {
     }
 
     int meanGrad = static_cast<int>(gradSum / std::max(1, gradCount));
-    int noiseFloor = std::max(18, meanGrad * 6 / 5);
+    int noiseFloor = std::max(12, meanGrad);
 
     // 4. Compute Center vs Border Intensity to generate Multi-Threshold Blob Candidates
     long long centerSum = 0, centerCnt = 0;
@@ -568,7 +568,7 @@ Quad detectDocumentBounds(const uint8_t* grayBuffer, int width, int height) {
     float bestScore = -1.0f;
 
     // Test multiple segmentation thresholds between center and border intensity
-    const float alphas[5] = {0.30f, 0.45f, 0.55f, 0.68f, 0.80f};
+    const float alphas[6] = {0.20f, 0.32f, 0.45f, 0.58f, 0.70f, 0.82f};
     bool pageBrighterOptions[2] = {centerMean >= borderMean, centerMean < borderMean};
 
     for (int mode = 0; mode < 2; ++mode) {

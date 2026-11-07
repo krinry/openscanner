@@ -14,8 +14,8 @@ class DocumentAnalyzer(
 
     override fun analyze(image: ImageProxy) {
         val currentTimestamp = System.currentTimeMillis()
-        // Throttle to ~30 fps to conserve battery and CPU
-        if (currentTimestamp - lastAnalyzedTimestamp < 30) {
+        // Throttle to ~25 fps for responsive real-time tracking
+        if (currentTimestamp - lastAnalyzedTimestamp < 40) {
             image.close()
             return
         }
@@ -27,17 +27,38 @@ class DocumentAnalyzer(
             return
         }
 
-        val yBuffer: ByteBuffer = planes[0].buffer
-        val ySize = yBuffer.remaining()
-        val yuvBytes = ByteArray(ySize)
-        yBuffer.get(yuvBytes)
-
+        val yPlane = planes[0]
+        val yBuffer: ByteBuffer = yPlane.buffer
+        val rowStride = yPlane.rowStride
+        val pixelStride = yPlane.pixelStride
         val width = image.width
         val height = image.height
         val rotation = image.imageInfo.rotationDegrees
 
+        // Extract clean, unpadded Y-plane byte array (width x height) without rowStride shearing
+        val cleanBytes = ByteArray(width * height)
+        if (rowStride == width && pixelStride == 1) {
+            yBuffer.rewind()
+            yBuffer.get(cleanBytes, 0, width * height)
+        } else {
+            var destPos = 0
+            for (row in 0 until height) {
+                if (pixelStride == 1) {
+                    yBuffer.position(row * rowStride)
+                    yBuffer.get(cleanBytes, destPos, width)
+                    destPos += width
+                } else {
+                    var srcPos = row * rowStride
+                    for (col in 0 until width) {
+                        cleanBytes[destPos++] = yBuffer.get(srcPos)
+                        srcPos += pixelStride
+                    }
+                }
+            }
+        }
+
         // Rotate Y-plane to match upright display orientation
-        val (rotatedBytes, rotW, rotH) = rotateYPlane(yuvBytes, width, height, rotation)
+        val (rotatedBytes, rotW, rotH) = rotateYPlane(cleanBytes, width, height, rotation)
 
         val quad = NativeScannerEngine.detectDocumentBounds(rotatedBytes, rotW, rotH)
 

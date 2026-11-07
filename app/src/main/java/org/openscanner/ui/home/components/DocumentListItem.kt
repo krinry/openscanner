@@ -79,8 +79,7 @@ fun ScannerDocumentListItem(
                 .border(0.5.dp, colors.cardBorder, RoundedCornerShape(8.dp))
         ) {
             val thumbFile = remember(document.id) {
-                File(context.filesDir, "thumbs").listFiles()
-                    ?.firstOrNull { it.name.startsWith("thumb_${document.id}_") }
+                DocumentThumbnailLoader.findThumbnailFile(context, document.id)
             }
 
             if (thumbFile != null && thumbFile.exists()) {

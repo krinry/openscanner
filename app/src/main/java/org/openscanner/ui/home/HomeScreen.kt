@@ -230,14 +230,14 @@ fun HomeScreen(
             } else {
                 // Documents Tab Content
                 if (documents.isEmpty() && foldersWithCount.isEmpty()) {
-                    // Empty State with KingKong Bar & Recent Docs Header preserved at top
+                    // Empty State with Quick Tools Grid & Recent Docs Header preserved at top
                     Column(
                         modifier = Modifier
                             .fillMaxSize()
                             .verticalScroll(rememberScrollState())
                     ) {
                         if (selectedFolder == null && searchQuery.isEmpty()) {
-                            HomeKingKongGrid(
+                            HomeQuickToolsGrid(
                                 onSmartScanClick = { onNavigateToCamera(-1L, "Document") },
                                 onImportImagesClick = { imagePickerLauncher.launch("image/*") },
                                 onImportFilesClick = { pdfPickerLauncher.launch(arrayOf("application/pdf")) },
@@ -340,7 +340,7 @@ fun HomeScreen(
                         }
                     }
                 } else {
-                    // Content with KingKong Bar, Recent Docs Header, Folders & Documents
+                    // Content with Quick Tools Grid, Recent Docs Header, Folders & Documents
                     if (isGridView) {
                         LazyVerticalGrid(
                             columns = GridCells.Fixed(2),
@@ -349,10 +349,10 @@ fun HomeScreen(
                             verticalArrangement = Arrangement.spacedBy(12.dp),
                             modifier = Modifier.fillMaxSize()
                         ) {
-                            // KingKong quick access grid at the root level
+                            // Quick action tools grid at the root level
                             if (selectedFolder == null && searchQuery.isEmpty()) {
                                 item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(2) }) {
-                                    HomeKingKongGrid(
+                                    HomeQuickToolsGrid(
                                         onSmartScanClick = { onNavigateToCamera(-1L, "Document") },
                                         onImportImagesClick = { imagePickerLauncher.launch("image/*") },
                                         onImportFilesClick = { pdfPickerLauncher.launch(arrayOf("application/pdf")) },
@@ -434,10 +434,10 @@ fun HomeScreen(
                             contentPadding = PaddingValues(vertical = 8.dp),
                             modifier = Modifier.fillMaxSize()
                         ) {
-                            // KingKong quick access grid at the root level
+                            // Quick action tools grid at the root level
                             if (selectedFolder == null && searchQuery.isEmpty()) {
                                 item {
-                                    HomeKingKongGrid(
+                                    HomeQuickToolsGrid(
                                         onSmartScanClick = { onNavigateToCamera(-1L, "Document") },
                                         onImportImagesClick = { imagePickerLauncher.launch("image/*") },
                                         onImportFilesClick = { pdfPickerLauncher.launch(arrayOf("application/pdf")) },

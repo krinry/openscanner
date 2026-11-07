@@ -121,7 +121,7 @@ object EdgeDetector {
         }
 
         val meanGrad = (gradSum / max(1, gradCount)).toInt()
-        val noiseFloor = max(18, (meanGrad * 1.2f).toInt())
+        val noiseFloor = max(12, meanGrad)
 
         // 3. Center vs Border Mean
         var centerSum = 0L; var centerCnt = 0L
@@ -146,7 +146,7 @@ object EdgeDetector {
         var bestQuad: List<PointF>? = null
         var bestScore = -1.0f
 
-        val alphas = floatArrayOf(0.30f, 0.45f, 0.55f, 0.68f, 0.80f)
+        val alphas = floatArrayOf(0.20f, 0.32f, 0.45f, 0.58f, 0.70f, 0.82f)
         val pageBrighterOptions = booleanArrayOf(centerMean >= borderMean, centerMean < borderMean)
 
         for (mode in 0 until 2) {
@@ -314,8 +314,8 @@ object EdgeDetector {
         val q = ArrayDeque<Int>()
         val currentComp = mutableListOf<Int>()
 
-        val x0 = w * 3 / 10; val x1 = w * 7 / 10
-        val y0 = h * 3 / 10; val y1 = h * 7 / 10
+        val x0 = w * 2 / 10; val x1 = w * 8 / 10
+        val y0 = h * 2 / 10; val y1 = h * 8 / 10
 
         val dx = intArrayOf(1, -1, 0, 0)
         val dy = intArrayOf(0, 0, 1, -1)
@@ -468,7 +468,7 @@ object EdgeDetector {
         }
 
         val coverage = validEdgeHits.toFloat() / max(1, totalSamples)
-        if (coverage < 0.20f) return -1.0f
+        if (coverage < 0.10f) return -1.0f
 
         val borderRatio = borderPenaltyHits.toFloat() / max(1, totalSamples)
         if (borderRatio > 0.50f) return -1.0f

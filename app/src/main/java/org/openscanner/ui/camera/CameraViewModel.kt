@@ -96,6 +96,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     private var steadyFrameCount = 0
     private var lastStableTimestamp = 0L
+    private var consecutiveMissingFrames = 0
 
     fun toggleAutoCapture() {
         _autoCaptureMode.value = !_autoCaptureMode.value
@@ -113,13 +114,25 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun onDocumentDetected(quad: DocumentQuadrilateral, width: Int, height: Int) {
+        val isReal = !quad.isDefaultFallback(width.toFloat(), height.toFloat())
+        if (!isReal) {
+            steadyFrameCount = 0
+            _stabilityState.value = StabilityState.SEARCHING
+            consecutiveMissingFrames++
+            if (consecutiveMissingFrames >= 4) {
+                _detectedQuad.value = null
+            }
+            return
+        }
+        consecutiveMissingFrames = 0
+
         val prev = _detectedQuad.value
         val smoothed = if (prev == null || _previewDimens.value != Pair(width, height)) {
             steadyFrameCount = 0
             _stabilityState.value = StabilityState.SEARCHING
             quad
         } else {
-            val alpha = 0.28f // Fine tuned low-pass smoothing for buttery movement
+            val alpha = 0.32f // Responsive low-pass smoothing for natural corner tracking
             fun lerp(p1: PointF, p2: PointF): PointF =
                 PointF(p1.x + alpha * (p2.x - p1.x), p1.y + alpha * (p2.y - p1.y))
 
@@ -138,14 +151,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 quad.bottomLeft.distanceTo(prev.bottomLeft)
             )
 
-            if (maxDelta < 14f) {
+            if (maxDelta < 16f) {
                 steadyFrameCount++
-                if (steadyFrameCount >= 6) {
+                if (steadyFrameCount >= 5) {
                     if (_stabilityState.value != StabilityState.STEADY_LOCKED) {
                         _stabilityState.value = StabilityState.STEADY_LOCKED
                         lastStableTimestamp = System.currentTimeMillis()
-                    } else if (_autoCaptureMode.value && System.currentTimeMillis() - lastStableTimestamp >= 800L) {
-                        // Document has been steady for > 800ms -> Trigger auto shutter!
+                    } else if (_autoCaptureMode.value && System.currentTimeMillis() - lastStableTimestamp >= 750L) {
+                        // Document has been steady for > 750ms -> Trigger auto shutter!
                         _triggerAutoCapture.value = System.currentTimeMillis()
                         steadyFrameCount = 0
                         lastStableTimestamp = System.currentTimeMillis() + 2500L // Cool-down

@@ -25,11 +25,11 @@ import org.openscanner.ui.theme.ScannerGreen
 import org.openscanner.ui.theme.ScannerTheme
 
 /**
- * 2x4 Quick Action "KingKong" Grid displayed at the top of the Home Screen,
- * providing one-tap access to primary scanning and document utilities.
+ * OpenScanner Quick Action Grid displayed at the top of the Home Screen,
+ * providing one-tap access to primary camera scanning and document utilities.
  */
 @Composable
-fun HomeKingKongGrid(
+fun HomeQuickToolsGrid(
     onSmartScanClick: () -> Unit,
     onImportImagesClick: () -> Unit,
     onImportFilesClick: () -> Unit,
@@ -43,49 +43,49 @@ fun HomeKingKongGrid(
     val colors = ScannerTheme.colors
 
     val items = listOf(
-        KingKongItem(
+        QuickToolItem(
             title = "Smart Scan",
             icon = Icons.Default.CameraAlt,
             tint = ScannerGreen,
             onClick = onSmartScanClick
         ),
-        KingKongItem(
+        QuickToolItem(
             title = "Import Photos",
             icon = Icons.Default.AddPhotoAlternate,
             tint = Color(0xFF2979FF),
             onClick = onImportImagesClick
         ),
-        KingKongItem(
+        QuickToolItem(
             title = "Import Files",
             icon = Icons.Default.DriveFolderUpload,
             tint = Color(0xFFFF9100),
             onClick = onImportFilesClick
         ),
-        KingKongItem(
+        QuickToolItem(
             title = "ID Card",
             icon = Icons.Default.Badge,
             tint = Color(0xFF00B0FF),
             onClick = onIdCardClick
         ),
-        KingKongItem(
+        QuickToolItem(
             title = "To Text (OCR)",
             icon = Icons.Default.TextFields,
             tint = Color(0xFF7C4DFF),
             onClick = onOcrClick
         ),
-        KingKongItem(
+        QuickToolItem(
             title = "PDF Tools",
             icon = Icons.Default.PictureAsPdf,
             tint = Color(0xFFFF5252),
             onClick = onPdfToolsClick
         ),
-        KingKongItem(
+        QuickToolItem(
             title = "Watermark",
             icon = Icons.AutoMirrored.Filled.BrandingWatermark,
             tint = Color(0xFF00BFA5),
             onClick = onWatermarkClick
         ),
-        KingKongItem(
+        QuickToolItem(
             title = "All Tools",
             icon = Icons.Default.Apps,
             tint = if (colors.isDark) Color(0xFFB0BEC5) else Color(0xFF546E7A),
@@ -104,7 +104,7 @@ fun HomeKingKongGrid(
             horizontalArrangement = Arrangement.SpaceAround
         ) {
             for (i in 0 until 4) {
-                KingKongCell(
+                QuickToolCell(
                     item = items[i],
                     modifier = Modifier.weight(1f)
                 )
@@ -119,7 +119,7 @@ fun HomeKingKongGrid(
             horizontalArrangement = Arrangement.SpaceAround
         ) {
             for (i in 4 until 8) {
-                KingKongCell(
+                QuickToolCell(
                     item = items[i],
                     modifier = Modifier.weight(1f)
                 )
@@ -128,7 +128,7 @@ fun HomeKingKongGrid(
     }
 }
 
-private data class KingKongItem(
+private data class QuickToolItem(
     val title: String,
     val icon: ImageVector,
     val tint: Color,
@@ -136,8 +136,8 @@ private data class KingKongItem(
 )
 
 @Composable
-private fun KingKongCell(
-    item: KingKongItem,
+private fun QuickToolCell(
+    item: QuickToolItem,
     modifier: Modifier = Modifier
 ) {
     val colors = ScannerTheme.colors
@@ -150,7 +150,7 @@ private fun KingKongCell(
             .clickable(onClick = item.onClick)
             .padding(vertical = 4.dp, horizontal = 2.dp)
     ) {
-        // Circular Icon Badge
+        // Circular Icon Badge with brand tint container
         Surface(
             modifier = Modifier.size(50.dp),
             shape = CircleShape,

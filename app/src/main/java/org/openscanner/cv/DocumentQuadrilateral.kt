@@ -51,4 +51,17 @@ data class DocumentQuadrilateral(
             )
         }
     }
+
+    fun isDefaultFallback(width: Float, height: Float, tolerance: Float = 24f): Boolean {
+        val mx = width * 0.08f
+        val my = height * 0.08f
+        return kotlin.math.abs(topLeft.x - mx) <= tolerance &&
+               kotlin.math.abs(topLeft.y - my) <= tolerance &&
+               kotlin.math.abs(topRight.x - (width - mx)) <= tolerance &&
+               kotlin.math.abs(topRight.y - my) <= tolerance &&
+               kotlin.math.abs(bottomRight.x - (width - mx)) <= tolerance &&
+               kotlin.math.abs(bottomRight.y - (height - my)) <= tolerance &&
+               kotlin.math.abs(bottomLeft.x - mx) <= tolerance &&
+               kotlin.math.abs(bottomLeft.y - (height - my)) <= tolerance
+    }
 }
