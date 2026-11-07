@@ -17,6 +17,10 @@ object ImageEnhancer {
             EnhanceMode.BW.id -> applyBradleySauvolaBW(bitmap, 0.20f)
             EnhanceMode.BW2.id -> applyBradleySauvolaBW(bitmap, 0.28f)
             EnhanceMode.GRAYSCALE.id -> applyGrayscale(bitmap)
+            EnhanceMode.BLUEPRINT.id -> applyBlueprint(bitmap)
+            EnhanceMode.ECO_TEXT.id -> applyBradleySauvolaBW(bitmap, 0.14f)
+            EnhanceMode.STAMP.id -> applyStamp(bitmap)
+            EnhanceMode.WARM.id -> applyWarm(bitmap)
             EnhanceMode.ORIGINAL.id -> { /* No-op */ }
         }
     }
@@ -346,6 +350,88 @@ object ImageEnhancer {
             b = (factor * (b - 128) + 128 + brightness).toInt()
 
             pixels[i] = (0xFF shl 24) or (clamp255(r) shl 16) or (clamp255(g) shl 8) or clamp255(b)
+        }
+        bitmap.setPixels(pixels, 0, width, 0, 0, width, height)
+    }
+
+    fun applyBlueprint(bitmap: Bitmap) {
+        val width = bitmap.width
+        val height = bitmap.height
+        val total = width * height
+        val pixels = IntArray(total)
+        bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
+        for (i in 0 until total) {
+            val p = pixels[i]
+            val r = (p shr 16) and 0xff
+            val g = (p shr 8) and 0xff
+            val b = p and 0xff
+            val lum = (r * 77 + g * 150 + b * 29) shr 8
+            val inv = 255 - lum
+            val nr = if (inv < 120) (inv * 0.12f).toInt() else (200 + ((inv - 120) / 135f) * 55).toInt()
+            val ng = if (inv < 120) (inv * 0.20f).toInt() else (220 + ((inv - 120) / 135f) * 35).toInt()
+            val nb = if (inv < 120) (inv * 0.35f + 16).toInt() else 255
+            pixels[i] = (0xFF shl 24) or (clamp255(nr) shl 16) or (clamp255(ng) shl 8) or clamp255(nb)
+        }
+        bitmap.setPixels(pixels, 0, width, 0, 0, width, height)
+    }
+
+    fun applyStamp(bitmap: Bitmap) {
+        val width = bitmap.width
+        val height = bitmap.height
+        val total = width * height
+        val pixels = IntArray(total)
+        bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
+        for (i in 0 until total) {
+            val p = pixels[i]
+            val r = (p shr 16) and 0xff
+            val g = (p shr 8) and 0xff
+            val b = p and 0xff
+            val isRedInk = (r > 110) && (r > g * 1.35f) && (r > b * 1.35f)
+            val isBlueInk = (b > 100) && (b > r * 1.25f) && (b > g * 1.15f)
+            if (isRedInk) {
+                val nr = min(255, (r * 1.35f + 15).toInt())
+                val ng = (g * 0.75f).toInt()
+                val nb = (b * 0.75f).toInt()
+                pixels[i] = (0xFF shl 24) or (clamp255(nr) shl 16) or (clamp255(ng) shl 8) or clamp255(nb)
+            } else if (isBlueInk) {
+                val nr = (r * 0.70f).toInt()
+                val ng = (g * 0.85f).toInt()
+                val nb = min(255, (b * 1.35f + 20).toInt())
+                pixels[i] = (0xFF shl 24) or (clamp255(nr) shl 16) or (clamp255(ng) shl 8) or clamp255(nb)
+            } else {
+                val lum = (r * 77 + g * 150 + b * 29) shr 8
+                if (lum < 140) {
+                    val dark = (lum * 0.65f).toInt()
+                    pixels[i] = (0xFF shl 24) or (dark shl 16) or (dark shl 8) or dark
+                } else {
+                    pixels[i] = -1 // Pure white
+                }
+            }
+        }
+        bitmap.setPixels(pixels, 0, width, 0, 0, width, height)
+    }
+
+    fun applyWarm(bitmap: Bitmap) {
+        val width = bitmap.width
+        val height = bitmap.height
+        val total = width * height
+        val pixels = IntArray(total)
+        bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
+        for (i in 0 until total) {
+            val p = pixels[i]
+            val r = (p shr 16) and 0xff
+            val g = (p shr 8) and 0xff
+            val b = p and 0xff
+            val lum = (r * 77 + g * 150 + b * 29) shr 8
+            if (lum > 140) {
+                val wr = min(255, lum + 10)
+                val wg = min(255, lum + 4)
+                val wb = max(0, lum - 14)
+                pixels[i] = (0xFF shl 24) or (clamp255(wr) shl 16) or (clamp255(wg) shl 8) or clamp255(wb)
+            } else {
+                val dark = max(20, (lum * 0.85f).toInt())
+                pixels[i] = (0xFF shl 24) or ((dark + 4) shl 16) or (dark shl 8) or max(0, dark - 4)
+            }
         }
         bitmap.setPixels(pixels, 0, width, 0, 0, width, height)
     }

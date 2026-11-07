@@ -38,6 +38,10 @@ void applyLightenNative(uint32_t* pixels, int width, int height);
 void applyNoShadowNative(uint32_t* pixels, int width, int height);
 void applyDeblurNative(uint32_t* pixels, int width, int height);
 void applyColorDocNative(uint32_t* pixels, int width, int height);
+void applyBlueprintInvertNative(uint32_t* pixels, int width, int height);
+void applyEcoTextNative(uint32_t* pixels, int width, int height);
+void applyStampSealNative(uint32_t* pixels, int width, int height);
+void applyWarmPaperNative(uint32_t* pixels, int width, int height);
 void applyBrightnessContrastNative(uint32_t* pixels, int width, int height, int brightness, int contrast, int sharpness = 0);
 
 #endif // OPENSCANNER_NATIVE_SCANNER_H

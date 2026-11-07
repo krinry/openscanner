@@ -45,6 +45,12 @@ enum class QualityMode(val label: String, val description: String) {
     UHD("UHD", "Maximum sensor resolution")
 }
 
+enum class StabilityState {
+    SEARCHING,     // Scanning for document contours
+    STABILIZING,   // Document detected, aligning
+    STEADY_LOCKED  // Document locked and steady (ready to snap)
+}
+
 class CameraViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _currentMode = MutableStateFlow(CaptureMode.DOCUMENT)
@@ -79,26 +85,80 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val _batchQueue = MutableStateFlow<List<BatchCaptureItem>>(emptyList())
     val batchQueue: StateFlow<List<BatchCaptureItem>> = _batchQueue.asStateFlow()
 
+    private val _stabilityState = MutableStateFlow(StabilityState.SEARCHING)
+    val stabilityState: StateFlow<StabilityState> = _stabilityState
+
+    private val _autoCaptureMode = MutableStateFlow(false)
+    val autoCaptureMode: StateFlow<Boolean> = _autoCaptureMode
+
+    private val _triggerAutoCapture = MutableStateFlow<Long?>(null)
+    val triggerAutoCapture: StateFlow<Long?> = _triggerAutoCapture
+
+    private var steadyFrameCount = 0
+    private var lastStableTimestamp = 0L
+
+    fun toggleAutoCapture() {
+        _autoCaptureMode.value = !_autoCaptureMode.value
+    }
+
+    fun clearAutoCaptureTrigger() {
+        _triggerAutoCapture.value = null
+    }
+
     fun setMode(mode: CaptureMode) {
         _currentMode.value = mode
         _detectedQuad.value = null
+        _stabilityState.value = StabilityState.SEARCHING
+        steadyFrameCount = 0
     }
 
     fun onDocumentDetected(quad: DocumentQuadrilateral, width: Int, height: Int) {
         val prev = _detectedQuad.value
         val smoothed = if (prev == null || _previewDimens.value != Pair(width, height)) {
+            steadyFrameCount = 0
+            _stabilityState.value = StabilityState.SEARCHING
             quad
         } else {
-            val alpha = 0.35f
+            val alpha = 0.28f // Fine tuned low-pass smoothing for buttery movement
             fun lerp(p1: PointF, p2: PointF): PointF =
                 PointF(p1.x + alpha * (p2.x - p1.x), p1.y + alpha * (p2.y - p1.y))
 
-            DocumentQuadrilateral(
+            val smoothedQuad = DocumentQuadrilateral(
                 topLeft = lerp(prev.topLeft, quad.topLeft),
                 topRight = lerp(prev.topRight, quad.topRight),
                 bottomRight = lerp(prev.bottomRight, quad.bottomRight),
                 bottomLeft = lerp(prev.bottomLeft, quad.bottomLeft)
             )
+
+            // Measure corner displacement across frames for stability
+            val maxDelta = maxOf(
+                quad.topLeft.distanceTo(prev.topLeft),
+                quad.topRight.distanceTo(prev.topRight),
+                quad.bottomRight.distanceTo(prev.bottomRight),
+                quad.bottomLeft.distanceTo(prev.bottomLeft)
+            )
+
+            if (maxDelta < 14f) {
+                steadyFrameCount++
+                if (steadyFrameCount >= 6) {
+                    if (_stabilityState.value != StabilityState.STEADY_LOCKED) {
+                        _stabilityState.value = StabilityState.STEADY_LOCKED
+                        lastStableTimestamp = System.currentTimeMillis()
+                    } else if (_autoCaptureMode.value && System.currentTimeMillis() - lastStableTimestamp >= 800L) {
+                        // Document has been steady for > 800ms -> Trigger auto shutter!
+                        _triggerAutoCapture.value = System.currentTimeMillis()
+                        steadyFrameCount = 0
+                        lastStableTimestamp = System.currentTimeMillis() + 2500L // Cool-down
+                    }
+                } else {
+                    _stabilityState.value = StabilityState.STABILIZING
+                }
+            } else {
+                steadyFrameCount = 0
+                _stabilityState.value = StabilityState.SEARCHING
+            }
+
+            smoothedQuad
         }
         _detectedQuad.value = smoothed
         _previewDimens.value = Pair(width, height)

@@ -32,6 +32,7 @@ fun MagnifierLoupe(
     imageScale: Float,
     fitRect: android.graphics.RectF? = null,
     handlePoint: Offset? = null,
+    isSnapped: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val activeTarget = handlePoint ?: touchPoint
@@ -56,12 +57,15 @@ fun MagnifierLoupe(
         (anchorTouch.y + 70f).toInt()
     }
 
+    val reticleColor = if (isSnapped) Color(0xFF00E5FF) else ScannerGreen
+    val borderColor = if (isSnapped) Color(0xFF00E5FF) else ScannerGreen
+
     Box(
         modifier = modifier
             .offset { IntOffset(posX, posY) }
             .size(loupeSize)
             .clip(CircleShape)
-            .border(3.dp, ScannerGreen, CircleShape)
+            .border(3.5.dp, borderColor, CircleShape)
     ) {
         Canvas(modifier = Modifier.size(loupeSize)) {
             // Circular aperture clip
@@ -95,12 +99,17 @@ fun MagnifierLoupe(
             // Primary crosshairs
             drawLine(Color.White, Offset(c.x - 20f, c.y), Offset(c.x + 20f, c.y), strokeWidth = 2.5f)
             drawLine(Color.White, Offset(c.x, c.y - 20f), Offset(c.x, c.y + 20f), strokeWidth = 2.5f)
-            drawLine(ScannerGreen, Offset(c.x - 14f, c.y), Offset(c.x + 14f, c.y), strokeWidth = 1.5f)
-            drawLine(ScannerGreen, Offset(c.x, c.y - 14f), Offset(c.x, c.y + 14f), strokeWidth = 1.5f)
+            drawLine(reticleColor, Offset(c.x - 14f, c.y), Offset(c.x + 14f, c.y), strokeWidth = 1.8f)
+            drawLine(reticleColor, Offset(c.x, c.y - 14f), Offset(c.x, c.y + 14f), strokeWidth = 1.8f)
 
             // Center micro-dot
             drawCircle(Color.White, radius = 3.5f, center = c)
-            drawCircle(ScannerGreen, radius = 2f, center = c)
+            drawCircle(reticleColor, radius = 2f, center = c)
+
+            if (isSnapped) {
+                // Subtle glowing snap ring at center
+                drawCircle(Color(0xFF00E5FF).copy(alpha = 0.35f), radius = 10f, center = c)
+            }
         }
     }
 }

@@ -12,7 +12,7 @@ import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.outlined.Crop
 import androidx.compose.material.icons.outlined.Draw
 import androidx.compose.material.icons.outlined.Edit
-import androidx.compose.material.ripple.rememberRipple
+import androidx.compose.material3.ripple
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -80,7 +80,7 @@ fun ViewerBottomBar(
                         .clip(RoundedCornerShape(12.dp))
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
-                            indication = rememberRipple(bounded = true, color = ScannerGreen),
+                            indication = ripple(bounded = true, color = ScannerGreen),
                             onClick = onShareClick
                         )
                         .padding(vertical = 4.dp, horizontal = 8.dp)
@@ -142,7 +142,7 @@ private fun ViewerBottomActionItem(
             .clip(RoundedCornerShape(8.dp))
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
-                indication = rememberRipple(bounded = true, color = Color.White.copy(alpha = 0.2f)),
+                indication = ripple(bounded = true, color = Color.White.copy(alpha = 0.2f)),
                 onClick = onClick
             )
             .padding(vertical = 6.dp, horizontal = 2.dp)

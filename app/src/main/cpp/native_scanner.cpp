@@ -111,6 +111,18 @@ Java_org_openscanner_cv_NativeScannerEngine_applyFilter(
         case 8: // Vivid / Color Doc
             applyColorDocNative(px, info.width, info.height);
             break;
+        case 9: // Blueprint / Dark Invert
+            applyBlueprintInvertNative(px, info.width, info.height);
+            break;
+        case 10: // Eco Text
+            applyEcoTextNative(px, info.width, info.height);
+            break;
+        case 11: // Stamp & Seal
+            applyStampSealNative(px, info.width, info.height);
+            break;
+        case 12: // Warm Paper
+            applyWarmPaperNative(px, info.width, info.height);
+            break;
         default:
             break;
     }

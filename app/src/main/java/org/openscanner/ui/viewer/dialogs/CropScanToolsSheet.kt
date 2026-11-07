@@ -81,6 +81,7 @@ fun CropScanToolsSheet(
     var quad by remember { mutableStateOf<DocumentQuadrilateral?>(null) }
     var activeTouchPoint by remember { mutableStateOf<Offset?>(null) }
     var activeHandlePoint by remember { mutableStateOf<Offset?>(null) }
+    var isCropHandleSnapped by remember { mutableStateOf(false) }
     var viewWidth by remember { mutableFloatStateOf(1f) }
     var viewHeight by remember { mutableFloatStateOf(1f) }
 
@@ -435,9 +436,10 @@ fun CropScanToolsSheet(
                                     boundsRect = fitRect,
                                     onQuadChanged = { updatedQuad -> quad = updatedQuad },
                                     onTouchPoint = { pt -> activeTouchPoint = pt },
-                                    onHandleActive = { handlePt, touchPt ->
+                                    onHandleActive = { handlePt, touchPt, snapped ->
                                         activeHandlePoint = handlePt
                                         activeTouchPoint = touchPt
+                                        isCropHandleSnapped = snapped
                                     }
                                 )
 
@@ -447,7 +449,8 @@ fun CropScanToolsSheet(
                                     touchPoint = activeTouchPoint,
                                     imageScale = imgScale,
                                     fitRect = fitRect,
-                                    handlePoint = activeHandlePoint
+                                    handlePoint = activeHandlePoint,
+                                    isSnapped = isCropHandleSnapped
                                 )
                             }
                         } ?: CircularProgressIndicator(color = ScannerGreen)

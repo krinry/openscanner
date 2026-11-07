@@ -367,3 +367,120 @@ void applyBrightnessContrastNative(uint32_t* pixels, int width, int height, int 
         applyDeblurNative(pixels, width, height);
     }
 }
+
+// Blueprint Invert Filter: Negative inverted document (crisp white text on dark blueprint/slate)
+void applyBlueprintInvertNative(uint32_t* pixels, int width, int height) {
+    if (!pixels || width <= 0 || height <= 0) return;
+    int total = width * height;
+
+    for (int i = 0; i < total; ++i) {
+        uint32_t p = pixels[i];
+        int r = (p >> 16) & 0xff;
+        int g = (p >> 8) & 0xff;
+        int b = p & 0xff;
+
+        int lum = (r * 77 + g * 150 + b * 29) >> 8;
+        // Invert luminance
+        int inv = 255 - lum;
+
+        int nr, ng, nb;
+        if (inv < 120) {
+            // Dark blueprint background tone
+            nr = static_cast<int>(inv * 0.12f);
+            ng = static_cast<int>(inv * 0.20f);
+            nb = static_cast<int>(inv * 0.35f + 16);
+        } else {
+            // High contrast text
+            float boost = (inv - 120) / 135.0f;
+            nr = clamp255(static_cast<int>(200 + boost * 55));
+            ng = clamp255(static_cast<int>(220 + boost * 35));
+            nb = 255;
+        }
+
+        pixels[i] = 0xFF000000 | (clamp255(nr) << 16) | (clamp255(ng) << 8) | clamp255(nb);
+    }
+}
+
+// Eco Text Filter: Ultra-clean ink-saver binarization with isolated speckle reduction
+void applyEcoTextNative(uint32_t* pixels, int width, int height) {
+    if (!pixels || width <= 0 || height <= 0) return;
+    applyBradleySauvolaBWNative(pixels, width, height, 0.14f);
+}
+
+// Stamp & Seal Filter: Isolates and saturates official red/blue stamps and signatures
+void applyStampSealNative(uint32_t* pixels, int width, int height) {
+    if (!pixels || width <= 0 || height <= 0) return;
+    int total = width * height;
+
+    for (int i = 0; i < total; ++i) {
+        uint32_t p = pixels[i];
+        int r = (p >> 16) & 0xff;
+        int g = (p >> 8) & 0xff;
+        int b = p & 0xff;
+
+        float fr = r / 255.0f;
+        float fg = g / 255.0f;
+        float fb = b / 255.0f;
+
+        float maxC = std::max({fr, fg, fb});
+        float minC = std::min({fr, fg, fb});
+        float delta = maxC - minC;
+
+        float sat = (maxC > 1e-4f) ? (delta / maxC) : 0.0f;
+
+        // Check for colored ink (red seal or blue stamp)
+        bool isRedInk = (r > 110) && (r > g * 1.35f) && (r > b * 1.35f);
+        bool isBlueInk = (b > 100) && (b > r * 1.25f) && (b > g * 1.15f);
+
+        if (isRedInk) {
+            // Punch up red stamp
+            int nr = std::min(255, static_cast<int>(r * 1.35f + 15));
+            int ng = static_cast<int>(g * 0.75f);
+            int nb = static_cast<int>(b * 0.75f);
+            pixels[i] = 0xFF000000 | (clamp255(nr) << 16) | (clamp255(ng) << 8) | clamp255(nb);
+        } else if (isBlueInk) {
+            // Punch up blue ink / signature
+            int nr = static_cast<int>(r * 0.70f);
+            int ng = static_cast<int>(g * 0.85f);
+            int nb = std::min(255, static_cast<int>(b * 1.35f + 20));
+            pixels[i] = 0xFF000000 | (clamp255(nr) << 16) | (clamp255(ng) << 8) | clamp255(nb);
+        } else {
+            // Regular text or paper
+            int lum = (r * 77 + g * 150 + b * 29) >> 8;
+            if (lum < 140) {
+                // Crisp deep black text
+                int dark = static_cast<int>(lum * 0.65f);
+                pixels[i] = 0xFF000000 | (dark << 16) | (dark << 8) | dark;
+            } else {
+                // Pure clean white paper
+                pixels[i] = 0xFFFFFFFF;
+            }
+        }
+    }
+}
+
+// Warm Paper Filter: Eye-care soft parchment tone with softened contrast
+void applyWarmPaperNative(uint32_t* pixels, int width, int height) {
+    if (!pixels || width <= 0 || height <= 0) return;
+    int total = width * height;
+
+    for (int i = 0; i < total; ++i) {
+        uint32_t p = pixels[i];
+        int r = (p >> 16) & 0xff;
+        int g = (p >> 8) & 0xff;
+        int b = p & 0xff;
+
+        int lum = (r * 77 + g * 150 + b * 29) >> 8;
+        if (lum > 140) {
+            // Warm parchment background
+            int wr = std::min(255, lum + 10);
+            int wg = std::min(255, lum + 4);
+            int wb = std::max(0, lum - 14);
+            pixels[i] = 0xFF000000 | (clamp255(wr) << 16) | (clamp255(wg) << 8) | clamp255(wb);
+        } else {
+            // Softened charcoal ink
+            int dark = std::max(20, static_cast<int>(lum * 0.85f));
+            pixels[i] = 0xFF000000 | ((dark + 4) << 16) | (dark << 8) | std::max(0, dark - 4);
+        }
+    }
+}

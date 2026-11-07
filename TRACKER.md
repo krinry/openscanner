@@ -11,21 +11,29 @@
 | Module | Feature / Capability | Status | Verified |
 | :--- | :--- | :---: | :---: |
 | **Camera & Capture** | Real-time 60fps Sobel contour detection overlay | ✅ Completed | Yes |
+| | Low-pass EMA temporal tracking & anti-jitter smoothing | ✅ Completed | Yes |
+| | Document Stability Detector & Auto-Capture Countdown | ✅ Completed | Yes |
 | | Emerald green laser polygon with L-brackets | ✅ Completed | Yes |
 | | Single Capture Mode (Auto-stabilized shutter) | ✅ Completed | Yes |
 | | Batch Capture Mode (Rapid multi-page continuous scanning) | ✅ Completed | Yes |
 | | ID Card Dual-Sided Capture (Front + Back on A4) | ✅ Completed | Yes |
 | | Book Curvature Split Mode | ✅ Completed | Yes |
 | | QR & Barcode Scanner Integration | ✅ Completed | Yes |
-| | Viewfinder Controls (Flash Auto/On/Off, Grid, Focus) | ✅ Completed | Yes |
+| | Viewfinder Controls (Auto/Manual Shutter, Flash, Grid) | ✅ Completed | Yes |
 | **Crop & Geometry** | 8-Point Draggable Polygon (4 corners + 4 midpoints) | ✅ Completed | Yes |
-| | Floating Magnifier Loupe (2x zoom with crosshairs) | ✅ Completed | Yes |
+| | Magnetic Snap Crop (Image boundary & 90° orthogonal snap) | ✅ Completed | Yes |
+| | Tactile Haptic Snap Feedback & Cyan Alignment Guides | ✅ Completed | Yes |
+| | Floating Magnifier Loupe (2.2x zoom with snap reticle) | ✅ Completed | Yes |
 | | Auto-crop quadrilateral calculation | ✅ Completed | Yes |
 | | 3x3 Homography Bilinear Perspective Warp (C++) | ✅ Completed | Yes |
 | **Image Enhancement**| Magic Color (CLAHE + Whitening + Saturation Boost) | ✅ Completed | Yes |
 | | B&W 1 & B&W 2 (Bradley-Roth & Sauvola adaptive binarization) | ✅ Completed | Yes |
 | | Grayscale (Contrast-stretched 8-bit monochromatic) | ✅ Completed | Yes |
 | | Lighten / No-Shadow background illumination correction | ✅ Completed | Yes |
+| | Blueprint Inverted (High contrast white-on-dark document) | ✅ Completed | Yes |
+| | Eco Text (Ultra-clean ink-saver binarization) | ✅ Completed | Yes |
+| | Stamp & Seal (Vivid red/blue ink booster) | ✅ Completed | Yes |
+| | Warm Paper (Soft eye-care parchment tone) | ✅ Completed | Yes |
 | | Manual Tuning Sliders (Brightness, Contrast, Sharpness) | ✅ Completed | Yes |
 | **Folder & Organization**| Folder Hierarchy Entity & Room DAO migrations | ✅ Completed | Yes |
 | | Custom Manila Folder Canvas Vector Graphic | ✅ Completed | Yes |

@@ -40,6 +40,8 @@ fun ViewfinderOverlay(
     previewHeight: Int,
     showGrid: Boolean = false,
     idCardStep: Int = 1,
+    stabilityState: StabilityState = StabilityState.SEARCHING,
+    autoCaptureMode: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     Box(modifier = modifier.fillMaxSize()) {
@@ -280,14 +282,17 @@ fun ViewfinderOverlay(
                             close()
                         }
 
+                        val isSteady = (stabilityState == StabilityState.STEADY_LOCKED)
+                        val activeLaserColor = if (isSteady) Color(0xFF00E676) else ScannerGreen
+
                         // Translucent green tint over detected document
-                        drawPath(polyPath, color = ScannerGreen.copy(alpha = 0.18f))
+                        drawPath(polyPath, color = activeLaserColor.copy(alpha = if (isSteady) 0.24f else 0.16f))
                         // Green boundary outline
-                        drawPath(polyPath, color = ScannerGreen, style = Stroke(width = 2.5.dp.toPx()))
+                        drawPath(polyPath, color = activeLaserColor, style = Stroke(width = if (isSteady) 3.2.dp.toPx() else 2.2.dp.toPx()))
 
                         // High-contrast L-shaped corner brackets
-                        val bracketLen = 22.dp.toPx()
-                        val bracketStroke = Stroke(width = 3.5.dp.toPx())
+                        val bracketLen = if (isSteady) 26.dp.toPx() else 22.dp.toPx()
+                        val bracketStroke = Stroke(width = if (isSteady) 4.dp.toPx() else 3.5.dp.toPx())
 
                         fun drawCornerBracket(corner: Offset, dirX: Float, dirY: Float) {
                             val path = Path().apply {
@@ -296,7 +301,7 @@ fun ViewfinderOverlay(
                                 lineTo(corner.x, corner.y + dirY * bracketLen)
                             }
                             drawPath(path, color = Color.White, style = bracketStroke)
-                            drawPath(path, color = ScannerGreen, style = Stroke(width = 2.dp.toPx()))
+                            drawPath(path, color = activeLaserColor, style = Stroke(width = 2.dp.toPx()))
                         }
 
                         drawCornerBracket(p1, 1f, 1f)   // Top-Left
@@ -356,6 +361,30 @@ fun ViewfinderOverlay(
                     text = "Align book center crease with dashed spine guide",
                     color = Color.White,
                     fontWeight = FontWeight.SemiBold,
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 7.dp)
+                )
+            }
+        } else if (mode == CaptureMode.DOCUMENT && quad != null) {
+            val pillText = when (stabilityState) {
+                StabilityState.STEADY_LOCKED -> if (autoCaptureMode) "● AUTO CAPTURING..." else "READY • HOLD STEADY"
+                StabilityState.STABILIZING -> "ALIGNING DOCUMENT..."
+                StabilityState.SEARCHING -> "DOCUMENT DETECTED"
+            }
+            val pillBorder = if (stabilityState == StabilityState.STEADY_LOCKED) Color(0xFF00E676) else ScannerGreen
+
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 96.dp),
+                color = Color.Black.copy(alpha = 0.75f),
+                shape = RoundedCornerShape(16.dp),
+                border = BorderStroke(1.2.dp, pillBorder)
+            ) {
+                Text(
+                    text = pillText,
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
                     fontSize = 12.sp,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 7.dp)
                 )

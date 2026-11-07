@@ -213,6 +213,9 @@ fun CameraScreen(
     val autoCropEnabled by viewModel.autoCropEnabled.collectAsState()
     val batchCount by viewModel.batchCount.collectAsState()
     val batchQueue by viewModel.batchQueue.collectAsState()
+    val autoCaptureMode by viewModel.autoCaptureMode.collectAsState()
+    val stabilityState by viewModel.stabilityState.collectAsState()
+    val triggerAutoCapture by viewModel.triggerAutoCapture.collectAsState()
 
     var camera by remember { mutableStateOf<Camera?>(null) }
     var imageCapture: ImageCapture? by remember { mutableStateOf(null) }
@@ -448,7 +451,9 @@ fun CameraScreen(
             previewWidth = previewDimens.first,
             previewHeight = previewDimens.second,
             showGrid = showGrid,
-            idCardStep = if (idCardFrontBitmap == null) 1 else 2
+            idCardStep = if (idCardFrontBitmap == null) 1 else 2,
+            stabilityState = stabilityState,
+            autoCaptureMode = autoCaptureMode
         )
 
         // Top Control Bar (5 items matching uploaded screenshot layout)
@@ -523,7 +528,37 @@ fun CameraScreen(
                 )
             }
 
-            // 5. Settings Gear (Opens M3 Side Sheet)
+            // 5. Auto / Manual Shutter Toggle Pill
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = if (autoCaptureMode) ScannerGreen.copy(alpha = 0.25f) else Color.Black.copy(alpha = 0.5f),
+                border = BorderStroke(1.dp, if (autoCaptureMode) ScannerGreen else Color.Gray),
+                modifier = Modifier.clickable {
+                    viewModel.toggleAutoCapture()
+                    Toast.makeText(context, if (!autoCaptureMode) "Auto-Shutter ON" else "Auto-Shutter OFF", Toast.LENGTH_SHORT).show()
+                }
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp)
+                ) {
+                    Icon(
+                        if (autoCaptureMode) Icons.Default.CameraAlt else Icons.Outlined.CameraAlt,
+                        contentDescription = "Auto Shutter",
+                        tint = if (autoCaptureMode) ScannerGreen else Color.White,
+                        modifier = Modifier.size(15.dp)
+                    )
+                    Spacer(modifier = Modifier.width(3.dp))
+                    Text(
+                        text = if (autoCaptureMode) "AUTO" else "MANUAL",
+                        color = if (autoCaptureMode) ScannerGreen else Color.White,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
+            // 6. Settings Gear (Opens M3 Side Sheet)
             IconButton(onClick = { showSideSheet = true }) {
                 Icon(
                     Icons.Default.Settings,
@@ -798,6 +833,32 @@ fun CameraScreen(
                             tint = Color.White,
                             modifier = Modifier.size(22.dp)
                         )
+                    }
+                }
+
+                // Auto-Capture Shutter Event Trigger
+                LaunchedEffect(triggerAutoCapture) {
+                    if (triggerAutoCapture != null) {
+                        viewModel.clearAutoCaptureTrigger()
+                        imageCapture?.let { capture ->
+                            if (currentMode == CaptureMode.DOCUMENT) {
+                                if (cropAfterScan) {
+                                    viewModel.capturePhoto(
+                                        imageCapture = capture,
+                                        onPhotoCaptured = { savedPath ->
+                                            pendingCropImagePath = savedPath
+                                        },
+                                        onError = { Toast.makeText(context, "Auto-capture failed", Toast.LENGTH_SHORT).show() }
+                                    )
+                                } else {
+                                    viewModel.captureBatchPhoto(
+                                        imageCapture = capture,
+                                        onSuccess = { Toast.makeText(context, "Auto-captured document page", Toast.LENGTH_SHORT).show() },
+                                        onError = { Toast.makeText(context, "Auto-capture failed", Toast.LENGTH_SHORT).show() }
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
 

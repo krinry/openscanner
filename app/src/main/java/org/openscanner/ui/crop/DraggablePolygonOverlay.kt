@@ -10,13 +10,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.dp
 import org.openscanner.cv.DocumentQuadrilateral
 import org.openscanner.cv.PointF
 import org.openscanner.ui.theme.ScannerGreen
+import kotlin.math.abs
 import kotlin.math.hypot
 
 @Composable
@@ -25,11 +28,12 @@ fun DraggablePolygonOverlay(
     boundsRect: RectF,
     onQuadChanged: (DocumentQuadrilateral) -> Unit,
     onTouchPoint: (Offset?) -> Unit = {},
-    onHandleActive: (handlePoint: Offset?, touchPoint: Offset?) -> Unit = { _, _ -> },
+    onHandleActive: (handlePoint: Offset?, touchPoint: Offset?, isSnapped: Boolean) -> Unit = { _, _, _ -> },
     zoomScale: Float = 1f,
     onTransform: (zoomChange: Float, panChange: Offset) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
+    val haptic = LocalHapticFeedback.current
     val currentQuad by rememberUpdatedState(quad)
     val currentBounds by rememberUpdatedState(boundsRect)
     val currentOnQuadChanged by rememberUpdatedState(onQuadChanged)
@@ -39,6 +43,8 @@ fun DraggablePolygonOverlay(
     val currentZoomScale by rememberUpdatedState(zoomScale)
 
     var activeHandleIndex by remember { mutableIntStateOf(-1) }
+    var wasSnapped by remember { mutableStateOf(false) }
+    var magneticGuideLines by remember { mutableStateOf<List<Pair<Offset, Offset>>>(emptyList()) }
 
     Canvas(
         modifier = modifier
@@ -71,7 +77,7 @@ fun DraggablePolygonOverlay(
                         activeHandleIndex = closest.first
                         val handlePos = handles[closest.first]
                         currentOnTouchPoint(down.position)
-                        currentOnHandleActive(handlePos, down.position)
+                        currentOnHandleActive(handlePos, down.position, false)
                     } else {
                         // Check if touch is inside the quadrilateral (to drag entire crop area)
                         val poly = listOf(p1, p2, p3, p4)
@@ -95,7 +101,7 @@ fun DraggablePolygonOverlay(
                             activeHandleIndex = -1
                         }
                         currentOnTouchPoint(null)
-                        currentOnHandleActive(null, null)
+                        currentOnHandleActive(null, null, false)
                     }
 
                     var isMultiTouch = false
@@ -110,8 +116,9 @@ fun DraggablePolygonOverlay(
                             // Two or more fingers: Pinch-to-zoom & pan
                             isMultiTouch = true
                             activeHandleIndex = -1
+                            magneticGuideLines = emptyList()
                             currentOnTouchPoint(null)
-                            currentOnHandleActive(null, null)
+                            currentOnHandleActive(null, null, false)
 
                             val ptr1 = pressedPointers[0].position
                             val ptr2 = pressedPointers[1].position
@@ -150,27 +157,118 @@ fun DraggablePolygonOverlay(
                                     return PointF(cx, cy)
                                 }
 
+                                // Magnetic snap threshold
+                                val snapDist = (24.dp.toPx() / currentZoomScale.coerceAtLeast(1f))
+                                var isSnapped = false
+                                val currentGuides = mutableListOf<Pair<Offset, Offset>>()
+
+                                fun magneticSnapCorner(rawPt: PointF, cornerIndex: Int): PointF {
+                                    var sx = rawPt.x
+                                    var sy = rawPt.y
+
+                                    // Image border magnetic snap
+                                    if (abs(sx - b.left) < snapDist) { sx = b.left; isSnapped = true }
+                                    else if (abs(sx - b.right) < snapDist) { sx = b.right; isSnapped = true }
+
+                                    if (abs(sy - b.top) < snapDist) { sy = b.top; isSnapped = true }
+                                    else if (abs(sy - b.bottom) < snapDist) { sy = b.bottom; isSnapped = true }
+
+                                    // Orthogonal 90-degree alignment snap to adjacent corners
+                                    when (cornerIndex) {
+                                        0 -> { // Top-Left: horizontal to Top-Right, vertical to Bottom-Left
+                                            if (abs(sy - curQ.topRight.y) < snapDist) {
+                                                sy = curQ.topRight.y
+                                                isSnapped = true
+                                                currentGuides.add(Offset(sx, sy) to Offset(curQ.topRight.x, curQ.topRight.y))
+                                            }
+                                            if (abs(sx - curQ.bottomLeft.x) < snapDist) {
+                                                sx = curQ.bottomLeft.x
+                                                isSnapped = true
+                                                currentGuides.add(Offset(sx, sy) to Offset(curQ.bottomLeft.x, curQ.bottomLeft.y))
+                                            }
+                                        }
+                                        1 -> { // Top-Right: horizontal to Top-Left, vertical to Bottom-Right
+                                            if (abs(sy - curQ.topLeft.y) < snapDist) {
+                                                sy = curQ.topLeft.y
+                                                isSnapped = true
+                                                currentGuides.add(Offset(sx, sy) to Offset(curQ.topLeft.x, curQ.topLeft.y))
+                                            }
+                                            if (abs(sx - curQ.bottomRight.x) < snapDist) {
+                                                sx = curQ.bottomRight.x
+                                                isSnapped = true
+                                                currentGuides.add(Offset(sx, sy) to Offset(curQ.bottomRight.x, curQ.bottomRight.y))
+                                            }
+                                        }
+                                        2 -> { // Bottom-Right: horizontal to Bottom-Left, vertical to Top-Right
+                                            if (abs(sy - curQ.bottomLeft.y) < snapDist) {
+                                                sy = curQ.bottomLeft.y
+                                                isSnapped = true
+                                                currentGuides.add(Offset(sx, sy) to Offset(curQ.bottomLeft.x, curQ.bottomLeft.y))
+                                            }
+                                            if (abs(sx - curQ.topRight.x) < snapDist) {
+                                                sx = curQ.topRight.x
+                                                isSnapped = true
+                                                currentGuides.add(Offset(sx, sy) to Offset(curQ.topRight.x, curQ.topRight.y))
+                                            }
+                                        }
+                                        3 -> { // Bottom-Left: horizontal to Bottom-Right, vertical to Top-Left
+                                            if (abs(sy - curQ.bottomRight.y) < snapDist) {
+                                                sy = curQ.bottomRight.y
+                                                isSnapped = true
+                                                currentGuides.add(Offset(sx, sy) to Offset(curQ.bottomRight.x, curQ.bottomRight.y))
+                                            }
+                                            if (abs(sx - curQ.topLeft.x) < snapDist) {
+                                                sx = curQ.topLeft.x
+                                                isSnapped = true
+                                                currentGuides.add(Offset(sx, sy) to Offset(curQ.topLeft.x, curQ.topLeft.y))
+                                            }
+                                        }
+                                    }
+
+                                    return clampPt(sx, sy)
+                                }
+
                                 val newQuad = when (activeHandleIndex) {
-                                    0 -> curQ.copy(topLeft = clampPt(curQ.topLeft.x + dx, curQ.topLeft.y + dy))
-                                    1 -> curQ.copy(topRight = clampPt(curQ.topRight.x + dx, curQ.topRight.y + dy))
-                                    2 -> curQ.copy(bottomRight = clampPt(curQ.bottomRight.x + dx, curQ.bottomRight.y + dy))
-                                    3 -> curQ.copy(bottomLeft = clampPt(curQ.bottomLeft.x + dx, curQ.bottomLeft.y + dy))
-                                    4 -> curQ.copy(
-                                        topLeft = clampPt(curQ.topLeft.x + dx, curQ.topLeft.y + dy),
-                                        topRight = clampPt(curQ.topRight.x + dx, curQ.topRight.y + dy)
-                                    )
-                                    5 -> curQ.copy(
-                                        topRight = clampPt(curQ.topRight.x + dx, curQ.topRight.y + dy),
-                                        bottomRight = clampPt(curQ.bottomRight.x + dx, curQ.bottomRight.y + dy)
-                                    )
-                                    6 -> curQ.copy(
-                                        bottomLeft = clampPt(curQ.bottomLeft.x + dx, curQ.bottomLeft.y + dy),
-                                        bottomRight = clampPt(curQ.bottomRight.x + dx, curQ.bottomRight.y + dy)
-                                    )
-                                    7 -> curQ.copy(
-                                        topLeft = clampPt(curQ.topLeft.x + dx, curQ.topLeft.y + dy),
-                                        bottomLeft = clampPt(curQ.bottomLeft.x + dx, curQ.bottomLeft.y + dy)
-                                    )
+                                    0 -> curQ.copy(topLeft = magneticSnapCorner(PointF(curQ.topLeft.x + dx, curQ.topLeft.y + dy), 0))
+                                    1 -> curQ.copy(topRight = magneticSnapCorner(PointF(curQ.topRight.x + dx, curQ.topRight.y + dy), 1))
+                                    2 -> curQ.copy(bottomRight = magneticSnapCorner(PointF(curQ.bottomRight.x + dx, curQ.bottomRight.y + dy), 2))
+                                    3 -> curQ.copy(bottomLeft = magneticSnapCorner(PointF(curQ.bottomLeft.x + dx, curQ.bottomLeft.y + dy), 3))
+                                    4 -> {
+                                        var ny = curQ.topLeft.y + dy
+                                        if (abs(ny - b.top) < snapDist) { ny = b.top; isSnapped = true }
+                                        val cny = clampPt(0f, ny).y
+                                        curQ.copy(
+                                            topLeft = PointF(curQ.topLeft.x, cny),
+                                            topRight = PointF(curQ.topRight.x, cny)
+                                        )
+                                    }
+                                    5 -> {
+                                        var nx = curQ.topRight.x + dx
+                                        if (abs(nx - b.right) < snapDist) { nx = b.right; isSnapped = true }
+                                        val cnx = clampPt(nx, 0f).x
+                                        curQ.copy(
+                                            topRight = PointF(cnx, curQ.topRight.y),
+                                            bottomRight = PointF(cnx, curQ.bottomRight.y)
+                                        )
+                                    }
+                                    6 -> {
+                                        var ny = curQ.bottomLeft.y + dy
+                                        if (abs(ny - b.bottom) < snapDist) { ny = b.bottom; isSnapped = true }
+                                        val cny = clampPt(0f, ny).y
+                                        curQ.copy(
+                                            bottomLeft = PointF(curQ.bottomLeft.x, cny),
+                                            bottomRight = PointF(curQ.bottomRight.x, cny)
+                                        )
+                                    }
+                                    7 -> {
+                                        var nx = curQ.topLeft.x + dx
+                                        if (abs(nx - b.left) < snapDist) { nx = b.left; isSnapped = true }
+                                        val cnx = clampPt(nx, 0f).x
+                                        curQ.copy(
+                                            topLeft = PointF(cnx, curQ.topLeft.y),
+                                            bottomLeft = PointF(cnx, curQ.bottomLeft.y)
+                                        )
+                                    }
                                     8 -> {
                                         val minX = minOf(curQ.topLeft.x, curQ.topRight.x, curQ.bottomRight.x, curQ.bottomLeft.x)
                                         val maxX = maxOf(curQ.topLeft.x, curQ.topRight.x, curQ.bottomRight.x, curQ.bottomLeft.x)
@@ -199,6 +297,13 @@ fun DraggablePolygonOverlay(
                                     else -> curQ
                                 }
 
+                                // Haptic feedback on snap state transition
+                                if (isSnapped && !wasSnapped) {
+                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                }
+                                wasSnapped = isSnapped
+                                magneticGuideLines = currentGuides
+
                                 currentOnQuadChanged(newQuad)
 
                                 if (activeHandleIndex < 8) {
@@ -223,18 +328,20 @@ fun DraggablePolygonOverlay(
                                         else -> currentPos
                                     }
                                     currentOnTouchPoint(currentPos)
-                                    currentOnHandleActive(updatedHandlePos, currentPos)
+                                    currentOnHandleActive(updatedHandlePos, currentPos, isSnapped)
                                 } else {
                                     currentOnTouchPoint(null)
-                                    currentOnHandleActive(null, null)
+                                    currentOnHandleActive(null, null, false)
                                 }
                             }
                         }
                     } while (pressedPointers.isNotEmpty())
 
                     activeHandleIndex = -1
+                    wasSnapped = false
+                    magneticGuideLines = emptyList()
                     currentOnTouchPoint(null)
-                    currentOnHandleActive(null, null)
+                    currentOnHandleActive(null, null, false)
                 }
             }
     ) {
@@ -251,25 +358,52 @@ fun DraggablePolygonOverlay(
             close()
         }
 
-        // Semi-transparent highlight over document area (reduced opacity for clear readability)
+        // Semi-transparent highlight over document area
         drawPath(
             path = path,
             color = ScannerGreen.copy(alpha = 0.07f)
         )
 
-        // Boundary lines in signature emerald green (subtle, crisp 2.2dp)
+        // Boundary lines in signature emerald green
         drawPath(
             path = path,
             color = ScannerGreen.copy(alpha = 0.8f),
             style = Stroke(width = 2.2.dp.toPx())
         )
 
-        // 4 Corner circular handles with white core and green border
+        // Draw magnetic alignment guide lines if active
+        if (magneticGuideLines.isNotEmpty()) {
+            val dashEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 8f), 0f)
+            magneticGuideLines.forEach { (start, end) ->
+                drawLine(
+                    color = Color(0xFF00E5FF),
+                    start = start,
+                    end = end,
+                    strokeWidth = 2.dp.toPx(),
+                    pathEffect = dashEffect
+                )
+            }
+        }
+
+        // 4 Corner circular handles with white core and green/cyan border
         val cornerRadius = 14.dp.toPx()
-        listOf(p1, p2, p3, p4).forEach { pt ->
+        listOf(
+            0 to p1,
+            1 to p2,
+            2 to p3,
+            3 to p4
+        ).forEach { (idx, pt) ->
+            val isCurrentActive = (activeHandleIndex == idx)
+            val ringColor = if (isCurrentActive && wasSnapped) Color(0xFF00E5FF) else ScannerGreen
+
             drawCircle(Color.White.copy(alpha = 0.95f), radius = cornerRadius, center = pt)
-            drawCircle(ScannerGreen.copy(alpha = 0.85f), radius = cornerRadius, center = pt, style = Stroke(3.dp.toPx()))
-            drawCircle(ScannerGreen, radius = 4.dp.toPx(), center = pt)
+            drawCircle(ringColor.copy(alpha = 0.90f), radius = cornerRadius, center = pt, style = Stroke(3.dp.toPx()))
+            drawCircle(ringColor, radius = 4.dp.toPx(), center = pt)
+
+            if (isCurrentActive && wasSnapped) {
+                // Subtle glowing magnetic pulse ring
+                drawCircle(Color(0xFF00E5FF).copy(alpha = 0.35f), radius = cornerRadius + 6.dp.toPx(), center = pt, style = Stroke(2.dp.toPx()))
+            }
         }
 
         // 4 Edge midpoint pill handles
@@ -279,9 +413,17 @@ fun DraggablePolygonOverlay(
         val midBottom = Offset((p3.x + p4.x) / 2f, (p3.y + p4.y) / 2f)
         val midLeft = Offset((p4.x + p1.x) / 2f, (p4.y + p1.y) / 2f)
 
-        listOf(midTop, midRight, midBottom, midLeft).forEach { pt ->
+        listOf(
+            4 to midTop,
+            5 to midRight,
+            6 to midBottom,
+            7 to midLeft
+        ).forEach { (idx, pt) ->
+            val isCurrentActive = (activeHandleIndex == idx)
+            val ringColor = if (isCurrentActive && wasSnapped) Color(0xFF00E5FF) else ScannerGreen
+
             drawCircle(Color.White.copy(alpha = 0.9f), radius = midRadius, center = pt)
-            drawCircle(ScannerGreen.copy(alpha = 0.85f), radius = midRadius, center = pt, style = Stroke(2.dp.toPx()))
+            drawCircle(ringColor.copy(alpha = 0.85f), radius = midRadius, center = pt, style = Stroke(2.dp.toPx()))
         }
     }
 }
